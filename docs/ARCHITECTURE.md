@@ -68,7 +68,8 @@ flowchart TB
 
 Note: the customers table is reached **through the Supabase MCP connector** (tool layer),
 not as a direct database connection — TrueForge's only direct Postgres connection is its
-own state database (`DATABASE_URL`). Keep those two in separate projects: never let the
+own state database (`POSTGRES_HOST`/`POSTGRES_USER`/etc. — see Phase 2.2's note on why
+this isn't a single `DATABASE_URL`). Keep those two in separate projects: never let the
 agent's data connector and the harness's operational database be the same place.
 
 Addendum (Phase 5.5/5.6/3.3): `recoup-actions` itself will also get a narrow, read-only

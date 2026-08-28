@@ -21,9 +21,14 @@ any models or tools. Nothing in later phases works without this existing first.
 - [ ] Store both connection strings in Secret Manager, not in any file that gets committed.
 
 ### 2.2 Deploy TrueForge to Cloud Run
-- [ ] Build/deploy the TrueForge server (hosted mode) to Cloud Run, with `DATABASE_URL`,
-      `REDIS_URL`, and `PUBLIC_BASE_URL` (the Cloud Run service URL) wired from Secret
-      Manager.
+- [ ] Build/deploy the TrueForge server (hosted mode) to Cloud Run. **TrueForge does not
+      read a single `DATABASE_URL`** — verified against `packages/trueforge/.env.example`
+      in the TrueForge source — it takes discrete `POSTGRES_USER`, `POSTGRES_PASSWORD`,
+      `POSTGRES_DB`, `POSTGRES_HOST`, `POSTGRES_PORT`. Split whatever connection string
+      the Postgres provider gives you into those five vars. `REDIS_URL` (a single
+      connection string) and `PUBLIC_BASE_URL` (the Cloud Run service URL, needed for MCP
+      OAuth callbacks) are both real, correct as single vars. Wire all of it from Secret
+      Manager, set `STANDALONE=false`.
 - [ ] Confirm the service is reachable and the UI loads at its Cloud Run URL.
 - [ ] Decide replica strategy: pinning to a single instance reduces (but doesn't officially
       eliminate the need for) Redis; the documented, supported path is Postgres + Redis
