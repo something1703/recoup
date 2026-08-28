@@ -71,6 +71,14 @@ not as a direct database connection — TrueForge's only direct Postgres connect
 own state database (`DATABASE_URL`). Keep those two in separate projects: never let the
 agent's data connector and the harness's operational database be the same place.
 
+Addendum (Phase 5.5/5.6/3.3): `recoup-actions` itself will also get a narrow, read-only
+Postgres connection to the *business-data* Supabase project — separate from the agent's
+MCP-mediated access above — so the server can independently verify decline code and LTV
+tier before retrying, and read/write the `dunning_policy` and `recovery_ledger` tables.
+This is not a duplicate path to the same data for the same reason: the agent's MCP
+access is for broad investigative reads; the server's is a narrow, specific lookup for a
+safety check it must not have to trust the agent for.
+
 ## What happens inside one investigation
 
 ```mermaid

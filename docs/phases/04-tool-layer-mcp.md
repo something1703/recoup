@@ -36,6 +36,22 @@ For each connector:
       `docs/ACCESS_CHECKLIST.md`.
 - [ ] Feed its printed customer IDs into Phase 3's Supabase seed, if not already done.
 
+### 4.4 Seed Sentry and GitHub evidence — don't leave two sub-agents starved
+The investigation is pitched as four-source correlation, but only Stripe/Supabase get
+seed data above. Sub-agents 3 (Sentry) and 4 (GitHub) will otherwise report into an
+empty project and an unrelated repo on every real run — half the fan-out would be
+theater. Fix both directions:
+- [ ] Seed a small fixture repo (e.g. `acme-billing-demo`) with a merged PR touching
+      webhook/billing code, timestamped inside the incident window — gives GitHub
+      deploy-correlation a real signal to find.
+- [ ] Seed one error spike in the scratch Sentry project, first-seen timestamp lined up
+      with the same window — gives Sentry error-correlation a real signal.
+- [ ] Rehearse both directions: a run where the evidence says "ordinary card churn,
+      nothing correlated" (the default fixture set), and a run where it says "this lines
+      up with a deploy" (using this seeded fixture repo/error). Two credible scenarios,
+      not one — this is also what makes `open_recovery_ticket`'s evidence links
+      (Phase 6.5) real instead of placeholder text.
+
 ## MCP to use
 
 The catalog connectors themselves (Stripe, Supabase, Sentry, GitHub, Linear) — see
@@ -48,3 +64,5 @@ correlation evidence, never a write.
 - [ ] All five connectors show a successful real tool call, not just a "connected" status.
 - [ ] Seeded Stripe test data exists and its customer IDs are reflected in the Phase 3
       Supabase table.
+- [ ] Sentry and GitHub each have real seeded evidence, not just a live but empty
+      connection.

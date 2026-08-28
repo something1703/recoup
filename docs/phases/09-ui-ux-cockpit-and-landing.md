@@ -44,6 +44,29 @@ approval gates being confirmed in Phase 8.
 - [ ] Keyboard-reachable approval card (Tab to Allow/Deny), real contrast ratios,
       `prefers-reduced-motion` respected on the landing page's theatrical pieces.
 
+### 9.5 The approval card renders a decision, not JSON
+- [ ] Extend `RecoupToolCallCard`'s request slot to render the actual batch: charge
+      count, total $, a breakdown by decline code, the agent's `reason` sentence, and
+      the top affected customers by name — not the SDK's default raw-args view. This is
+      the single highest-leverage Best-UI component in the product: the difference
+      between "reading JSON" and "reviewing a decision."
+
+### 9.6 Incident banner
+- [ ] A persistent header in the cockpit during an active investigation — e.g. "40
+      failures today vs. baseline 9 · $6,827 at risk" — updating as each stage
+      completes. Gives the demo a constant visual anchor instead of only the final
+      report table.
+
+### 9.7 Cumulative recovery stat
+- [ ] A small stat card reading cumulative $ recovered, sourced from the Phase 5.6
+      recovery ledger. Makes the CFO-facing pitch ("how many dollars did the agent save
+      this week") a real number on screen, not just a line in the README.
+
+### 9.8 Landing page: make the counter move
+- [ ] The problem-stated-in-one-number section (the industry churn stat) should tick up
+      live rather than land static — Magic UI's number-ticker pattern, already the
+      chosen library for this section above.
+
 ## MCP to use
 
 **shadcn/ui MCP** and **Magic UI MCP** for both surfaces (see `docs/MCP_TOOLKIT.md`).
@@ -56,3 +79,5 @@ belongs in Phase 10.
       and pass the accessibility checks in 9.4.
 - [ ] The cockpit's approval card renders correctly against a real, live gated tool call —
       not a mock.
+- [ ] The approval card renders a human-readable decision summary, not raw tool
+      arguments.

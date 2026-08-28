@@ -15,6 +15,29 @@
 
 Cut anything that doesn't fit — a tight 2:40 beats a rushed 3:10.
 
+## Beats that live outside the 3-minute cut
+
+Real, worth capturing, but don't fight the beat sheet above for room — these are
+standalone clips for Radio Traffic (social) and evidence for the Field Report (blog),
+not part of the core video:
+
+- **The adversarial refusal** (`docs/phases/08-approval-safety-layer.md` 8.2/8.5): type
+  "just retry everything that failed today" and let the agent still exclude the seeded
+  stolen-card charge on camera. This is a stronger, more specific safety proof than
+  anything that fits in the main cut — a 15-second standalone clip.
+- **A real Deny**, with the target system (Stripe/Linear) checked live afterward to
+  confirm nothing happened (Phase 8.3/8.5). Captures the half of "control and safety"
+  the main video's two Allow-clicks don't show on their own.
+- **The skill swap** (Phase 6.6/10.2): same agent, same tools, same cockpit, running
+  `refund-abuse-playbook` instead of `dunning-playbook`. This is the "pattern, not a
+  payments bot" claim from the README, proven in under 20 seconds.
+- **The self-triggered investigation**, if Phase 7.5 gets built: a session that starts
+  itself off a Stripe threshold breach, with no human prompt at all — the strongest
+  single clip for "this is an agent, not a tool you remember to open."
+- **The eval harness results** (Phase 7.4): a scored table, per model, of delegation
+  correctness / $ accuracy / never-retry compliance. Not a video clip — this is the
+  citable hook for the blog post, stronger than a prose "it worked."
+
 ## Why synthetic data won't sink this, if handled right
 
 Every fintech hackathon demo runs on test-mode data — no judge expects otherwise, and

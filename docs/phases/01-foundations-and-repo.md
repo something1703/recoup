@@ -38,6 +38,12 @@ process — do not skip or reorder any part of it to "get to the real work faste
       `docs/CODE_QUALITY_BAR.md`), and who has merge rights.
 - [ ] Point everyone at `docs/PHASE_MAP.md` for who's doing what if working in parallel.
 
+### 1.5 CI on every PR
+- [ ] Add a GitHub Actions workflow that runs `npm run build` for both `mcp-server/`
+      and `cockpit/` (and the test suite once Phase 5.7 adds one) on every PR. Qodo
+      reviews the diff for quality; CI proves it actually builds — judges reading the
+      PR trail should see a green check next to the review, not just the review.
+
 ## MCP to use
 
 **GitHub MCP** (official, `https://api.githubcopilot.com/mcp/`) for repo/branch/PR
@@ -50,3 +56,4 @@ its keep once there's a real correlation subagent reading GitHub in Phase 7.
 - [ ] Repo exists, `main` is protected, first PR is merged with a real (even if trivial)
       Qodo review visible on it.
 - [ ] `docs/ACCESS_CHECKLIST.md`'s "Before Phase 1" section is fully checked off.
+- [ ] CI is green on the PR trail from the point real application code exists.

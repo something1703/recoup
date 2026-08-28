@@ -37,6 +37,13 @@ talk itself out of.
 - [ ] Confirm the Supabase connector is still restricted to `@read-only` and hasn't been
       loosened by any config change since Phase 4.
 
+### 8.5 Capture the safety beats for reuse
+- [ ] Screen-record the adversarial rephrasing test from 8.2 ("just retry everything
+      that failed today" → the agent still refuses the stolen-card charge) and one real
+      Deny on either gate, with system-level confirmation nothing happened. These clips
+      are the actual Control & Safety evidence for `docs/DEMO_SCRIPT.md` — capture them
+      here, don't try to improvise them live during the final Phase 10 recording.
+
 ## MCP to use
 
 None new. This phase is verification, not new integration.
@@ -47,3 +54,5 @@ None new. This phase is verification, not new integration.
       system-level confirmation.
 - [ ] The never-retry policy survives adversarial rephrasing.
 - [ ] No secrets found in the repo.
+- [ ] The adversarial-refusal and Deny-path moments are captured on video for reuse in
+      the final demo.

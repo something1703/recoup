@@ -5,10 +5,10 @@
 | Criterion | Evidence in this build |
 |---|---|
 | Potential impact | Involuntary-churn recovery is a real line item on a SaaS P&L — "how many dollars did the agent save this week" is a number a CFO cares about, not just an engineer. |
-| Creativity & originality | Incident-response pattern applied to revenue instead of uptime; explicit two-path branching (retry vs. escalate) driven by policy, not a coin flip; four-source correlation (Stripe/Supabase/Sentry/GitHub) borrowed from real SRE root-causing practice. |
-| Technical excellence | Code Mode used for real (not cosmetic) arithmetic; custom MCP server with correct tool annotations; four-way sub-agent fan-out; session-survives-reconnect demoed live; a themed UI SDK app with a genuinely custom (not default) approval component. |
+| Creativity & originality | Incident-response pattern applied to revenue instead of uptime; explicit two-path branching (retry vs. escalate) driven by policy, not a coin flip; four-source correlation (Stripe/Supabase/Sentry/GitHub) borrowed from real SRE root-causing practice. A second skill (`refund-abuse-playbook`, Phase 6.6) run on the same agent/tools/cockpit proves "policy-as-skill" rather than just claiming it. |
+| Technical excellence | Code Mode used for real (not cosmetic) arithmetic; custom MCP server with correct tool annotations; four-way sub-agent fan-out; session-survives-reconnect demoed live; a themed UI SDK app with a genuinely custom (not default) approval component. A fixture-based eval harness (Phase 7.4) scores delegation, computed-$ accuracy, and never-retry compliance across both configured models. |
 | Use of sponsor tools | 5 catalog MCP servers + 1 custom one, sandbox, skills, Generative UI, in-chat OAuth, and the UI SDK — TrueForge is doing real work end to end, not wrapping a single model call. Qodo review trail on every PR (see `docs/CODE_QUALITY_BAR.md`). |
-| Control and safety | The single loudest beat in the video: the agent proposes retrying real money and the run **stops** until a human clicks Allow — with the cockpit's own high-stakes card, not the generic one. Never-retry decline codes are hard-blocked in the skill regardless of $ amount. |
+| Control and safety | The single loudest beat in the video: the agent proposes retrying real money and the run **stops** until a human clicks Allow — with the cockpit's own high-stakes card, not the generic one. Never-retry decline codes are hard-blocked in the skill *and* independently re-verified server-side (Phase 5.5), not trusted from the caller alone. |
 | Presentation | The cockpit itself, a Generative UI summary table, a crisp 3-minute video (`docs/DEMO_SCRIPT.md`), a README a stranger can actually run. |
 
 ## Track-by-track fit

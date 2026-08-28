@@ -47,3 +47,22 @@ flowchart LR
 
 Solo: work the list top to bottom, exactly as ordered. Team of 2+: split 3/4 and 7/8
 across people once 2 is done, resync before 9, all hands on 10.
+
+## Explicitly out of scope
+
+Considered and deliberately not built — each fights the harness, adds real risk, or
+buys no judged criterion:
+
+- **Slack-based approvals.** The harness's own approval UI *is* the point — routing
+  around it undercuts the "harness doing the work" argument the whole project rests on.
+- **Multi-tenant anything, auth on the cockpit.** This is a single-purpose demo surface
+  (`docs/UI_UX_SPEC.md`), not a product with users to isolate from each other.
+- **More than two skills.** One proves the pattern (Phase 6.6); a third adds build time
+  without adding proof.
+- **A trend chart or dashboard of historical failures.** Stripe test-mode timestamps
+  can't be backdated (`docs/ARCHITECTURE.md` gotcha #5) — don't try to fake one.
+- **A second landing page concept or a second design system.** One brand, two surfaces,
+  per `docs/UI_UX_SPEC.md`.
+
+If a future idea doesn't clearly serve one of the six judging criteria in
+`docs/JUDGING_FIT.md`, it belongs on this list, not in a phase file.

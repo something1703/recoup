@@ -30,6 +30,18 @@ against — separate from TrueForge's own operational database.
       realistic name/MRR distribution, decline-code proportions that mirror real dunning
       data.
 
+### 3.3 Move the dunning policy from hardcoded config to data
+- [ ] Create a `dunning_policy` table (or a single-row config table) holding what
+      `DUNNING_THRESHOLDS` in `mcp-server/src/index.ts` currently hardcodes:
+      `never_retry_decline_codes`, `safe_to_retry_decline_codes`,
+      `max_auto_retry_attempts`, `retry_backoff_hours`, `ltv_tiers`.
+- [ ] Point `get_dunning_thresholds` (Phase 5) at this table instead of the inline
+      const — makes the policy editable without a redeploy, and makes "the playbook is
+      configuration, not code" literally true instead of just narratively true.
+- [ ] Add a `recovery_ledger` table (Phase 5.6 writes to it, Phase 9.7 reads it):
+      timestamp, batch/ticket type, charge or issue IDs, the agent's stated reason, the
+      human's Allow/Deny decision, and the outcome.
+
 ## MCP to use
 
 None needed for this phase specifically — table creation and seeding are direct
@@ -42,3 +54,5 @@ when the *agent* queries this table at runtime.
       fixture data whose IDs match the Stripe test customers from Phase 4's seed run.
 - [ ] A read-only role exists and is the one that gets used for the connector, not an
       admin/service-role key.
+- [ ] The dunning policy and a recovery ledger both live in the data layer, not hardcoded
+      in `mcp-server/src/index.ts`.

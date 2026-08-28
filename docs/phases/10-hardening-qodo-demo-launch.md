@@ -20,9 +20,12 @@ time; it should only surface polish and confidence issues.
       (investigation → report → approval card renders → Allow works) so this isn't only
       ever tested by eyeballing it.
 
-### 10.2 The reconnect and model-swap beats
+### 10.2 The reconnect, model-swap, and skill-swap beats
 - [ ] Confirm the mid-run browser-refresh beat is smooth (`docs/DEMO_SCRIPT.md`).
 - [ ] Confirm the OpenAI ↔ Gemini model swap works and re-runs cleanly.
+- [ ] Confirm the dunning-playbook ↔ refund-abuse-playbook skill swap (Phase 6.6) runs
+      cleanly on the same agent, tools, and cockpit — this is the "pattern, not a
+      payments bot" claim, proven on camera rather than only asserted in the README.
 
 ### 10.3 Final Qodo + README pass
 - [ ] Every PR containing real hackathon code has gone through the full Qodo workflow in
@@ -42,7 +45,9 @@ time; it should only surface polish and confidence issues.
 ### 10.5 Submit
 - [ ] Public repo, working README, demo video linked, submission form filled out with
       margin before the deadline — not at the wire.
-- [ ] If pursuing the blog-post or social-post tracks, do them now, not after submitting.
+- [ ] If pursuing the blog-post or social-post tracks, do them now, not after submitting
+      — reference the Phase 7.4 eval harness results (a scored per-model comparison) as
+      the citable hook rather than a prose "it worked."
 
 ## MCP to use
 
