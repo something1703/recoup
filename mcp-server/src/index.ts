@@ -36,8 +36,23 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
+// Load .env for local dev. No-op when the file is absent (e.g. Cloud Run, where
+// config comes from Secret Manager env vars instead) — anything but ENOENT still throws.
+try {
+  process.loadEnvFile();
+} catch (err) {
+  if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+}
+
 const PORT = Number(process.env.PORT ?? 8890);
-const MCP_SERVER_TOKEN = process.env.MCP_SERVER_TOKEN ?? "dev-only-change-me";
+// No fallback: a missed secret on a real deploy must fail loudly, not quietly become
+// a publicly-known credential.
+const MCP_SERVER_TOKEN = process.env.MCP_SERVER_TOKEN;
+if (!MCP_SERVER_TOKEN) {
+  throw new Error(
+    "MCP_SERVER_TOKEN is not set. Copy mcp-server/.env.example to mcp-server/.env and set a real random value — there is no default.",
+  );
+}
 const DRY_RUN = (process.env.DRY_RUN ?? "true").toLowerCase() !== "false";
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const LINEAR_API_KEY = process.env.LINEAR_API_KEY;
@@ -60,6 +75,27 @@ const DUNNING_THRESHOLDS = {
   },
   updated_at: "2026-08-01",
 } as const;
+
+// ---------------------------------------------------------------------------
+// Linear's IssueCreateInput.teamId requires a resolved team UUID — team_key /
+// LINEAR_TEAM_KEY are human-readable keys (e.g. "OPS"), not UUIDs, so resolve first.
+// ---------------------------------------------------------------------------
+async function resolveLinearTeamId(apiKey: string, teamKey: string): Promise<string> {
+  const query = `query TeamByKey($key: String!) {
+    teams(filter: { key: { eq: $key } }) { nodes { id key } }
+  }`;
+  const response = await fetch("https://api.linear.app/graphql", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: apiKey },
+    body: JSON.stringify({ query, variables: { key: teamKey } }),
+  });
+  const json = await response.json();
+  const teamId = json?.data?.teams?.nodes?.[0]?.id as string | undefined;
+  if (!teamId) {
+    throw new Error(`No Linear team found for key "${teamKey}" — check LINEAR_TEAM_KEY / team_key.`);
+  }
+  return teamId;
+}
 
 // ---------------------------------------------------------------------------
 // MCP server + tool registrations
@@ -98,10 +134,20 @@ function buildServer(): McpServer {
       description:
         "Retry a batch of failed Stripe charges/invoices that were classified as safe-to-retry " +
         "(e.g. insufficient_funds, do_not_honor) and are NOT flagged for mandatory human escalation. " +
+        "Each charge must include the decline code it failed with — this server independently checks " +
+        "it against never_retry_decline_codes and refuses those regardless of what the caller intended. " +
         "Moves real money when DRY_RUN is off — this call is annotated destructive and MUST be gated " +
         "behind human approval in the agent spec (require_approval_for_tools).",
       inputSchema: {
-        charge_ids: z.array(z.string()).min(1).describe("Stripe PaymentIntent or Invoice IDs to retry."),
+        charges: z
+          .array(
+            z.object({
+              charge_id: z.string().describe("Stripe PaymentIntent (pi_...) or Invoice (in_...) ID to retry."),
+              decline_code: z.string().describe("The decline code this charge failed with, e.g. insufficient_funds."),
+            }),
+          )
+          .min(1)
+          .describe("Batch of charges to retry, each with the decline code it failed with."),
         reason: z.string().describe("One-sentence justification the agent generated for this batch."),
       },
       annotations: {
@@ -112,9 +158,20 @@ function buildServer(): McpServer {
         openWorldHint: true,
       },
     },
-    async ({ charge_ids, reason }) => {
+    async ({ charges, reason }) => {
+      // Hard block, independent of the caller's classification — dunning-playbook step 4:
+      // never retry these codes under any circumstance, even if the batch was approved.
+      const neverRetry = new Set<string>(DUNNING_THRESHOLDS.never_retry_decline_codes);
+      const blocked = charges.filter((c) => neverRetry.has(c.decline_code));
+      const eligible = charges.filter((c) => !neverRetry.has(c.decline_code));
+      const blockedResults = blocked.map((c) => ({
+        id: c.charge_id,
+        status: "blocked_never_retry" as const,
+        decline_code: c.decline_code,
+      }));
+
       if (DRY_RUN || !STRIPE_SECRET_KEY) {
-        const results = charge_ids.map((id) => ({ id, status: "simulated_retry_success" as const }));
+        const results = eligible.map((c) => ({ id: c.charge_id, status: "simulated_retry_success" as const }));
         return {
           content: [
             {
@@ -124,7 +181,7 @@ function buildServer(): McpServer {
                   dry_run: true,
                   note: "DRY_RUN is on (or STRIPE_SECRET_KEY is unset) — no real Stripe call was made.",
                   reason,
-                  results,
+                  results: [...blockedResults, ...results],
                 },
                 null,
                 2,
@@ -134,22 +191,42 @@ function buildServer(): McpServer {
         };
       }
 
-      // Live path — adapt to your real dunning flow. PaymentIntent.confirm() is the
-      // simple case for a one-off charge with a saved payment method; for subscription
-      // invoices, prefer stripe.invoices.pay(invoiceId) instead. Swap as needed.
+      if (!STRIPE_SECRET_KEY.startsWith("sk_test_")) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "STRIPE_SECRET_KEY is not a test-mode key (must start with sk_test_) — refusing to make a live call.",
+            },
+          ],
+        };
+      }
+
+      // Live path. PaymentIntents and Invoices need different Stripe calls — distinguish
+      // by ID prefix (pi_ vs in_) rather than assuming every ID is a PaymentIntent.
       const { default: Stripe } = await import("stripe");
       const stripe = new Stripe(STRIPE_SECRET_KEY);
-      const results = await Promise.all(
-        charge_ids.map(async (id) => {
+      const liveResults = await Promise.all(
+        eligible.map(async ({ charge_id }) => {
           try {
-            const intent = await stripe.paymentIntents.confirm(id);
-            return { id, status: intent.status };
+            const result = charge_id.startsWith("in_")
+              ? await stripe.invoices.pay(charge_id)
+              : await stripe.paymentIntents.confirm(charge_id);
+            return { id: charge_id, status: result.status };
           } catch (err) {
-            return { id, status: "error", error: err instanceof Error ? err.message : String(err) };
+            return { id: charge_id, status: "error", error: err instanceof Error ? err.message : String(err) };
           }
         }),
       );
-      return { content: [{ type: "text", text: JSON.stringify({ dry_run: false, reason, results }, null, 2) }] };
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ dry_run: false, reason, results: [...blockedResults, ...liveResults] }, null, 2),
+          },
+        ],
+      };
     },
   );
 
@@ -195,22 +272,48 @@ function buildServer(): McpServer {
         };
       }
 
-      // Live path — minimal Linear GraphQL call. Resolve a real team UUID from
-      // `team_key` via a `teams` query first in production; hardcode for the demo.
-      const priorityMap: Record<string, number> = { urgent: 1, high: 2, medium: 3, low: 4 };
-      const query = `mutation IssueCreate($input: IssueCreateInput!) {
-        issueCreate(input: $input) { success issue { id identifier url } }
-      }`;
-      const response = await fetch("https://api.linear.app/graphql", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: LINEAR_API_KEY },
-        body: JSON.stringify({
-          query,
-          variables: { input: { title, description, priority: priorityMap[priority], teamId: team_key ?? LINEAR_TEAM_KEY } },
-        }),
-      });
-      const json = await response.json();
-      return { content: [{ type: "text", text: JSON.stringify({ dry_run: false, linear_response: json }, null, 2) }] };
+      try {
+        const teamId = await resolveLinearTeamId(LINEAR_API_KEY, team_key ?? LINEAR_TEAM_KEY);
+        const priorityMap: Record<string, number> = { urgent: 1, high: 2, medium: 3, low: 4 };
+        const query = `mutation IssueCreate($input: IssueCreateInput!) {
+          issueCreate(input: $input) { success issue { id identifier url } }
+        }`;
+        const response = await fetch("https://api.linear.app/graphql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: LINEAR_API_KEY },
+          body: JSON.stringify({
+            query,
+            variables: { input: { title, description, priority: priorityMap[priority], teamId } },
+          }),
+        });
+        const json = await response.json();
+        const issueCreate = json?.data?.issueCreate;
+        if (!response.ok || json.errors || !issueCreate?.success) {
+          // Never report a filed ticket unless Linear actually confirmed one — the
+          // approving human trusts this response as ground truth.
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  { dry_run: false, error: "Linear did not confirm issue creation", linear_response: json },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+        return {
+          content: [{ type: "text", text: JSON.stringify({ dry_run: false, issue: issueCreate.issue }, null, 2) }],
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
+        };
+      }
     },
   );
 
@@ -253,5 +356,5 @@ app.post("/mcp", requireBearerToken, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`recoup-actions-mcp listening on :${PORT} (DRY_RUN=${DRY_RUN})`);
   console.log(`Register in TrueForge as a remote MCP server at http(s)://<public-url>/mcp`);
-  console.log(`Header auth: Authorization: Bearer ${MCP_SERVER_TOKEN}`);
+  console.log("Header auth configured — send Authorization: Bearer <your MCP_SERVER_TOKEN> (never logged)");
 });

@@ -5,7 +5,7 @@
   "description": "Custom remote MCP server for the Recoup hackathon agent — exposes the two gated write actions (retry_eligible_charges, open_recovery_ticket) and one read-only tool (get_dunning_thresholds) that TrueForge attaches alongside the catalog Stripe/Linear/Supabase servers.",
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.6.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

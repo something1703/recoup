@@ -8,7 +8,7 @@
  *
  * Usage:
  *   npm install stripe tsx --no-save
- *   STRIPE_SECRET_KEY=sk_test_... npx tsx seed-stripe-test-data.ts
+ *   STRIPE_SECRET_KEY=sk_test_... npx tsx scripts/seed-stripe-test-data.ts
  *
  * Stripe's documented test card numbers deterministically produce specific
  * decline codes in test mode — see https://docs.stripe.com/testing#declined-payments.
@@ -46,9 +46,11 @@ const FIXTURES = [
 
 async function main() {
   const rows: string[] = [];
+  const failures: string[] = [];
 
   for (const f of FIXTURES) {
     const customer = await stripe.customers.create({ name: f.name, description: `Recoup demo · ${f.plan}` });
+    let declineCode: string | undefined;
 
     try {
       await stripe.paymentIntents.create({
@@ -59,11 +61,23 @@ async function main() {
         confirm: true,
         off_session: true,
       });
-      console.error(`! expected a decline for ${f.name} but the charge succeeded — the test PaymentMethod id may be stale.`);
+      failures.push(`${f.name}: expected a decline but the charge succeeded — the test PaymentMethod id may be stale.`);
     } catch (err) {
       // Expected path: Stripe throws a card error for these dedicated test PaymentMethods.
-      const declineCode = err instanceof Stripe.errors.StripeCardError ? err.decline_code : undefined;
-      console.log(`Seeded failed charge for ${f.name} — decline_code=${declineCode ?? "(see error)"}`);
+      // Anything else (network, auth, rate limit) is a real failure, not a seeded decline.
+      if (err instanceof Stripe.errors.StripeCardError && err.decline_code) {
+        declineCode = err.decline_code;
+        console.log(`Seeded failed charge for ${f.name} — decline_code=${declineCode}`);
+      } else {
+        failures.push(`${f.name}: unexpected error, not a card decline — ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    if (declineCode === undefined) {
+      // No confirmed decline behind this customer — don't emit a Supabase row with
+      // nothing for the agent to actually find. Clean up so the account stays tidy.
+      await stripe.customers.del(customer.id).catch(() => {});
+      continue;
     }
 
     rows.push(
@@ -71,9 +85,18 @@ async function main() {
     );
   }
 
+  if (failures.length > 0) {
+    console.error(`\n${failures.length} fixture(s) did not seed a matching failed charge:`);
+    failures.forEach((f) => console.error(`  - ${f}`));
+  }
+
   console.log("\n--- paste into seed-supabase.sql, replacing the illustrative INSERT block ---\n");
   console.log("insert into public.customers (id, name, plan, mrr_usd, ltv_tier, signup_date) values");
   console.log(rows.join(",\n") + "\non conflict (id) do nothing;");
+
+  if (failures.length > 0) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((err) => {
