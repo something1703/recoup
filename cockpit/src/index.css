@@ -1,0 +1,33 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+}
+
+/* The bespoke wrapper around retry_eligible_charges / open_recovery_ticket calls.
+   The inner ToolCallCard (with highlightCard set) still renders the SDK's own
+   approval controls — this only adds the banner and the outer frame. */
+.recoup-approval-spotlight {
+  border: 2px solid #b8860b;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 8px 0;
+  box-shadow: 0 0 0 3px rgba(184, 134, 11, 0.12);
+}
+
+.recoup-approval-spotlight__banner {
+  background: linear-gradient(90deg, #fff7e6, #fdeecb);
+  color: #7a5200;
+  font-weight: 600;
+  font-size: 0.875rem;
+  padding: 8px 14px;
+  border-bottom: 1px solid #e9c46a;
+}

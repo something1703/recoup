@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Env files — real secrets live in Secret Manager / TrueForge connector configs, never here
+.env
+.env.local
+.env.*.local
+mcp-server/.env
+cockpit/.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Python (scripts may use it for seed data)
+__pycache__/
+*.pyc
+.venv/
+venv/
