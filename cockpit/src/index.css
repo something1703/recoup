@@ -41,3 +41,42 @@ body,
   outline: 3px solid #b8860b;
   outline-offset: 2px;
 }
+
+/* Phase 9.6: persistent investigation-status header. Deliberately NOT gold —
+   docs/UI_UX_SPEC.md reserves gold specifically for the approval moment, so
+   this stays neutral (running/done) or a plain warning red (cancelled/error),
+   never competing with the one card that's supposed to read as different. */
+.recoup-incident-banner {
+  padding: 10px 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-bottom: 1px solid #d8dee3;
+}
+.recoup-incident-banner--running,
+.recoup-incident-banner--done {
+  background: #e6f4ea;
+  color: #0f6b3f;
+}
+.recoup-incident-banner--cancelled,
+.recoup-incident-banner--error {
+  background: #fdecea;
+  color: #9b2c2c;
+}
+
+/* Phase 9.7: cumulative recovery stat. Quiet by default — the number itself
+   ticks up once on change (see RecoveryStatCard.tsx), nothing else animates. */
+.recoup-stat-card {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 0.8125rem;
+  color: #4b5563;
+  border-bottom: 1px solid #d8dee3;
+}
+.recoup-stat-card__value {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f6b3f;
+  font-variant-numeric: tabular-nums;
+}
