@@ -76,9 +76,13 @@ create table if not exists public.recovery_ledger (
   created_at timestamptz not null default now(),
   action_type text not null check (action_type in ('retry_eligible_charges', 'open_recovery_ticket')),
   reason text not null,
+  -- Always 'allow' in practice: TrueForge never calls the tool at all on Deny,
+  -- so this server structurally has no path to observe or record a denial —
+  -- that event lives entirely in TrueForge's own turn history.
   human_decision text not null check (human_decision in ('allow', 'deny')),
   charge_ids text[],                -- populated for retry_eligible_charges
   linear_issue_id text,             -- populated for open_recovery_ticket
+  amount_usd numeric not null default 0,  -- recovered $ (retries) or $ at risk (tickets) — cockpit's Phase 9.7 stat sums this
   outcome jsonb not null            -- per-charge status array, or the created issue
 );
 
