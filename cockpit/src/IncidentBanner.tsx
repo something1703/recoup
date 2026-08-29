@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Phase 9.6: a persistent header showing investigation status, independent of
@@ -25,32 +25,52 @@ type BannerState = { kind: "idle" } | ({ kind: TurnState["status"] } & Omit<Turn
 const TRUEFORGE_BASE_URL = import.meta.env.VITE_TRUEFORGE_BASE_URL ?? "http://localhost:8790";
 const POLL_INTERVAL_MS = 5000;
 
+// The route's own description claims "newest first by default" — checked against
+// the live instance and that's not what happens: turns come back oldest-first.
+// Walks every page via page_token (not just the first) so a session with more
+// than one page of turns still resolves to the true latest, not merely the
+// last element of an arbitrary first page.
+async function fetchLatestTurn(sessionId: string): Promise<{ state: TurnState } | undefined> {
+  let pageToken: string | undefined;
+  let lastPage: Array<{ state: TurnState }> = [];
+  for (;;) {
+    const url = new URL(`${TRUEFORGE_BASE_URL}/api/v1/sessions/${sessionId}/turns`);
+    url.searchParams.set("limit", "100");
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+    const res = await fetch(url);
+    if (!res.ok) break;
+    const json = (await res.json()) as { data: Array<{ state: TurnState }>; pagination?: { next_page_token?: string } };
+    lastPage = json.data;
+    if (!json.pagination?.next_page_token) break;
+    pageToken = json.pagination.next_page_token;
+  }
+  return lastPage[lastPage.length - 1];
+}
+
+// Renders nothing until a session actually exists — this is a status overlay, not a fixture of the layout.
 export function IncidentBanner() {
   const [state, setState] = useState<BannerState>({ kind: "idle" });
+  // Guards against a slower, older poll completing after a newer one and
+  // overwriting the banner with a stale status (setInterval ticks don't wait
+  // for the previous fetch to finish, so out-of-order completion is real).
+  const pollGeneration = useRef(0);
 
   useEffect(() => {
-    let cancelled = false;
-
+    // Finds the most recent session's latest turn and maps its status onto the banner.
     async function poll() {
+      const generation = ++pollGeneration.current;
       try {
         const sessionsRes = await fetch(`${TRUEFORGE_BASE_URL}/api/v1/sessions?limit=1&order=desc`);
         if (!sessionsRes.ok) return;
         const sessionsJson = (await sessionsRes.json()) as { data: Array<{ id: string }> };
         const latestSession = sessionsJson.data[0];
         if (!latestSession) {
-          if (!cancelled) setState({ kind: "idle" });
+          if (generation === pollGeneration.current) setState({ kind: "idle" });
           return;
         }
 
-        // The route's own description claims "newest first by default" — checked
-        // against the live instance and that's not what happens: turns come back
-        // oldest-first, and there's no `order` param to request otherwise (only
-        // limit/page_token). Fetch a generous page and take the last element.
-        const turnsRes = await fetch(`${TRUEFORGE_BASE_URL}/api/v1/sessions/${latestSession.id}/turns?limit=100`);
-        if (!turnsRes.ok) return;
-        const turnsJson = (await turnsRes.json()) as { data: Array<{ state: TurnState }> };
-        const latestTurn = turnsJson.data[turnsJson.data.length - 1];
-        if (cancelled) return;
+        const latestTurn = await fetchLatestTurn(latestSession.id);
+        if (generation !== pollGeneration.current) return; // a newer poll already landed
         if (!latestTurn) {
           setState({ kind: "idle" });
           return;
@@ -64,10 +84,7 @@ export function IncidentBanner() {
 
     void poll();
     const interval = setInterval(() => void poll(), POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, []);
 
   if (state.kind === "idle") return null;

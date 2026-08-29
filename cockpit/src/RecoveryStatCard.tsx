@@ -18,6 +18,7 @@ type Stats = { total_recovered_usd: number; tickets_opened: number; actions_coun
 
 const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
+// Tweens the displayed number toward `target` once per change instead of snapping, unless the viewer prefers reduced motion.
 function useAnimatedValue(target: number): number {
   const [displayed, setDisplayed] = useState(target);
   const fromRef = useRef(target);
@@ -33,6 +34,7 @@ function useAnimatedValue(target: number): number {
     const start = performance.now();
     let frame: number;
 
+    // One requestAnimationFrame tick of the tween from `from` toward `target`.
     function step(now: number) {
       const progress = Math.min((now - start) / TICK_DURATION_MS, 1);
       setDisplayed(from + (target - from) * progress);
@@ -49,6 +51,7 @@ function useAnimatedValue(target: number): number {
   return displayed;
 }
 
+// Renders nothing until the first successful /stats fetch — no placeholder $0 flash on load.
 export function RecoveryStatCard() {
   const [stats, setStats] = useState<Stats | null>(null);
 
