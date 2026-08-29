@@ -25,11 +25,7 @@ type BannerState = { kind: "idle" } | ({ kind: TurnState["status"] } & Omit<Turn
 const TRUEFORGE_BASE_URL = import.meta.env.VITE_TRUEFORGE_BASE_URL ?? "http://localhost:8790";
 const POLL_INTERVAL_MS = 5000;
 
-// The route's own description claims "newest first by default" — checked against
-// the live instance and that's not what happens: turns come back oldest-first.
-// Walks every page via page_token (not just the first) so a session with more
-// than one page of turns still resolves to the true latest, not merely the
-// last element of an arbitrary first page.
+// Turns come back oldest-first (checked live, despite the route's own docs claiming otherwise) — walks every page to find the true latest, not just the first page's last element.
 async function fetchLatestTurn(sessionId: string): Promise<{ state: TurnState } | undefined> {
   let pageToken: string | undefined;
   let lastPage: Array<{ state: TurnState }> = [];
@@ -38,7 +34,10 @@ async function fetchLatestTurn(sessionId: string): Promise<{ state: TurnState } 
     url.searchParams.set("limit", "100");
     if (pageToken) url.searchParams.set("page_token", pageToken);
     const res = await fetch(url);
-    if (!res.ok) break;
+    // A failure mid-traversal must not silently resolve to whatever page loaded
+    // last — that could be an older page, reporting a stale status as current.
+    // Throw so the caller keeps its existing state instead of regressing it.
+    if (!res.ok) throw new Error(`GET /sessions/${sessionId}/turns failed: ${String(res.status)}`);
     const json = (await res.json()) as { data: Array<{ state: TurnState }>; pagination?: { next_page_token?: string } };
     lastPage = json.data;
     if (!json.pagination?.next_page_token) break;
