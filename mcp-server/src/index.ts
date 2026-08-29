@@ -74,6 +74,115 @@ const CUSTOMERS_DB_URL = process.env.CUSTOMERS_DB_URL;
 const customersDb = CUSTOMERS_DB_URL ? new Pool({ connectionString: CUSTOMERS_DB_URL, max: 3 }) : undefined;
 
 // ---------------------------------------------------------------------------
+// A second, separate Postgres connection using the recoup_actions_service role
+// (SELECT on dunning_policy, SELECT+INSERT on recovery_ledger — never the same
+// role as customersDb above, which represents what the *agent* can read via
+// get_customer_ltv). This is the server's own audit trail, not something the
+// agent has any access to.
+// ---------------------------------------------------------------------------
+const RECOVERY_LEDGER_DB_URL = process.env.RECOVERY_LEDGER_DB_URL;
+const ledgerDb = RECOVERY_LEDGER_DB_URL ? new Pool({ connectionString: RECOVERY_LEDGER_DB_URL, max: 3 }) : undefined;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${String(ms)}ms`)), ms)),
+  ]);
+}
+
+type LedgerEntry = {
+  actionType: "retry_eligible_charges" | "open_recovery_ticket";
+  reason: string;
+  chargeIds?: string[];
+  linearIssueId?: string;
+  amountUsd: number;
+  outcome: unknown;
+};
+
+function insertLedgerRow(entry: LedgerEntry) {
+  // 'allow' is the only decision this server ever observes — TrueForge simply
+  // never calls the tool on Deny, so there is no path to record a denial here.
+  return ledgerDb!.query(
+    `insert into public.recovery_ledger
+       (action_type, reason, human_decision, charge_ids, linear_issue_id, amount_usd, outcome)
+     values ($1, $2, 'allow', $3, $4, $5, $6)`,
+    [entry.actionType, entry.reason, entry.chargeIds ?? null, entry.linearIssueId ?? null, entry.amountUsd, JSON.stringify(entry.outcome)],
+  );
+}
+
+// In-process durable-enough queue: an entry that fails its immediate write is
+// retried here indefinitely (not just once) until it succeeds, so a ledger
+// outage longer than the immediate bounded attempt still doesn't *permanently*
+// lose the audit row for an action that already succeeded for real — only
+// losable if this process itself dies with entries still queued, which a
+// full external outbox (Cloud Tasks, a queue table) would close but is more
+// infra than this project's audit trail warrants.
+const pendingLedgerEntries: LedgerEntry[] = [];
+let ledgerFlushTimer: NodeJS.Timeout | undefined;
+
+function scheduleLedgerFlush(): void {
+  if (ledgerFlushTimer) return;
+  ledgerFlushTimer = setInterval(() => {
+    void flushPendingLedgerEntries();
+  }, 10_000);
+}
+
+async function flushPendingLedgerEntries(): Promise<void> {
+  if (pendingLedgerEntries.length === 0) {
+    clearInterval(ledgerFlushTimer);
+    ledgerFlushTimer = undefined;
+    return;
+  }
+  const batch = pendingLedgerEntries.splice(0, pendingLedgerEntries.length);
+  for (const entry of batch) {
+    try {
+      await withTimeout(insertLedgerRow(entry), 1500);
+    } catch (err) {
+      console.error("[recovery_ledger] background retry still failing, re-queued:", err instanceof Error ? err.message : err);
+      pendingLedgerEntries.push(entry);
+    }
+  }
+}
+
+// The immediate attempt is bounded (1.5s) so a slow ledger DB can't stall an
+// already-succeeded Stripe/Linear action's response — anything that doesn't
+// land immediately falls back to the background queue above instead of being
+// discarded, since the real action already happened and losing the audit row
+// is a worse outcome than a delayed one.
+async function recordLedgerEntry(entry: LedgerEntry): Promise<void> {
+  if (!ledgerDb) return;
+  try {
+    await withTimeout(insertLedgerRow(entry), 1500);
+  } catch (err) {
+    console.error("[recovery_ledger] immediate write failed, queued for background retry:", err instanceof Error ? err.message : err);
+    pendingLedgerEntries.push(entry);
+    scheduleLedgerFlush();
+  }
+}
+
+// Guards Finding #9 (double-counting): a charge already credited as recovered
+// in a prior *live* run must not be counted again if the same batch is
+// resubmitted — Stripe itself is safe to re-confirm, but our own sum isn't.
+async function getAlreadyRecoveredChargeIds(): Promise<Set<string>> {
+  if (!ledgerDb) return new Set();
+  try {
+    const result = await withTimeout(
+      ledgerDb.query<{ charge_ids: string[] | null }>(
+        `select charge_ids from public.recovery_ledger
+         where action_type = 'retry_eligible_charges' and outcome ->> 'dry_run' = 'false'`,
+      ),
+      1500,
+    );
+    return new Set(result.rows.flatMap((row) => row.charge_ids ?? []));
+  } catch (err) {
+    // Fail open on the read: worst case a genuine re-recovery is undercounted
+    // once, which is far better than blocking every retry on a ledger outage.
+    console.error("[recovery_ledger] dedup lookup failed (proceeding without it):", err instanceof Error ? err.message : err);
+    return new Set();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Domain config the read-only tool exposes. In a real build this would live in
 // the "dunning-playbook" skill or a small config table — it's inlined here so
 // the starter kit has zero required external state to run.
@@ -195,6 +304,10 @@ function buildServer(): McpServer {
             z.object({
               charge_id: z.string().describe("Stripe PaymentIntent (pi_...) or Invoice (in_...) ID to retry."),
               decline_code: z.string().describe("The decline code this charge failed with, e.g. insufficient_funds."),
+              amount_usd: z
+                .number()
+                .nonnegative()
+                .describe("The charge amount in USD — from the same sandbox computation that sized this batch. Recorded for the recovery ledger, not used for eligibility."),
             }),
           )
           .min(1)
@@ -223,6 +336,14 @@ function buildServer(): McpServer {
 
       if (DRY_RUN || !STRIPE_SECRET_KEY) {
         const results = eligible.map((c) => ({ id: c.charge_id, status: "simulated_retry_success" as const }));
+        const amountUsd = eligible.reduce((sum, c) => sum + c.amount_usd, 0);
+        await recordLedgerEntry({
+          actionType: "retry_eligible_charges",
+          reason,
+          chargeIds: eligible.map((c) => c.charge_id),
+          amountUsd,
+          outcome: { dry_run: true, results: [...blockedResults, ...results] },
+        });
         return {
           content: [
             {
@@ -259,17 +380,35 @@ function buildServer(): McpServer {
       const { default: Stripe } = await import("stripe");
       const stripe = new Stripe(STRIPE_SECRET_KEY);
       const liveResults = await Promise.all(
-        eligible.map(async ({ charge_id }) => {
+        eligible.map(async ({ charge_id, amount_usd }) => {
           try {
             const result = charge_id.startsWith("in_")
               ? await stripe.invoices.pay(charge_id)
               : await stripe.paymentIntents.confirm(charge_id);
-            return { id: charge_id, status: result.status };
+            return { id: charge_id, status: result.status, amount_usd };
           } catch (err) {
-            return { id: charge_id, status: "error", error: err instanceof Error ? err.message : String(err) };
+            return { id: charge_id, status: "error", amount_usd, error: err instanceof Error ? err.message : String(err) };
           }
         }),
       );
+      // Only a genuinely-paid result counts as "recovered" — confirm() can
+      // return requires_action/requires_payment_method/canceled without
+      // throwing, and only "paid" means an invoice actually collected.
+      const isRecovered = (r: { id: string; status: string | null }) =>
+        r.id.startsWith("in_") ? r.status === "paid" : r.status === "succeeded";
+      // A charge already credited in a prior live run must not be counted
+      // again if this exact batch gets resubmitted (Finding #9).
+      const alreadyRecovered = await getAlreadyRecoveredChargeIds();
+      const recoveredUsd = liveResults
+        .filter((r) => isRecovered(r) && !alreadyRecovered.has(r.id))
+        .reduce((sum, r) => sum + r.amount_usd, 0);
+      await recordLedgerEntry({
+        actionType: "retry_eligible_charges",
+        reason,
+        chargeIds: eligible.map((c) => c.charge_id),
+        amountUsd: recoveredUsd,
+        outcome: { dry_run: false, results: [...blockedResults, ...liveResults] },
+      });
       return {
         content: [
           {
@@ -294,6 +433,10 @@ function buildServer(): McpServer {
         description: z.string().describe("Root-cause summary with evidence: linked Sentry issue, affected charge IDs, $ at risk."),
         priority: z.enum(["urgent", "high", "medium", "low"]).default("high"),
         team_key: z.string().optional(),
+        amount_at_risk_usd: z
+          .number()
+          .nonnegative()
+          .describe("The $ at risk for this segment, from the same sandbox computation that sized it. Recorded for the recovery ledger."),
       },
       annotations: {
         title: "Open recovery ticket",
@@ -303,8 +446,16 @@ function buildServer(): McpServer {
         openWorldHint: true,
       },
     },
-    async ({ title, description, priority, team_key }) => {
+    async ({ title, description, priority, team_key, amount_at_risk_usd }) => {
       if (DRY_RUN || !LINEAR_API_KEY) {
+        const simulatedIssue = { id: `SIM-${randomUUID().slice(0, 8)}`, title, priority, team_key: team_key ?? LINEAR_TEAM_KEY };
+        await recordLedgerEntry({
+          actionType: "open_recovery_ticket",
+          reason: description,
+          linearIssueId: simulatedIssue.id,
+          amountUsd: amount_at_risk_usd,
+          outcome: { dry_run: true, simulated_issue: simulatedIssue },
+        });
         return {
           content: [
             {
@@ -313,7 +464,7 @@ function buildServer(): McpServer {
                 {
                   dry_run: true,
                   note: "DRY_RUN is on (or LINEAR_API_KEY is unset) — no real Linear ticket was created.",
-                  simulated_issue: { id: `SIM-${randomUUID().slice(0, 8)}`, title, priority, team_key: team_key ?? LINEAR_TEAM_KEY },
+                  simulated_issue: simulatedIssue,
                 },
                 null,
                 2,
@@ -356,6 +507,13 @@ function buildServer(): McpServer {
             ],
           };
         }
+        await recordLedgerEntry({
+          actionType: "open_recovery_ticket",
+          reason: description,
+          linearIssueId: issueCreate.issue?.identifier ?? issueCreate.issue?.id,
+          amountUsd: amount_at_risk_usd,
+          outcome: { dry_run: false, issue: issueCreate.issue },
+        });
         return {
           content: [{ type: "text", text: JSON.stringify({ dry_run: false, issue: issueCreate.issue }, null, 2) }],
         };
@@ -389,6 +547,36 @@ function requireBearerToken(req: Request, res: Response, next: NextFunction): vo
 
 app.get("/healthz", (_req, res) => {
   res.json({ ok: true, dry_run: DRY_RUN });
+});
+
+// Public and aggregate-only so the cockpit's browser can call it directly — never row-level detail, never the MCP bearer token.
+app.get("/stats", async (_req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  if (!ledgerDb) {
+    res.json({ total_recovered_usd: 0, tickets_opened: 0, actions_count: 0 });
+    return;
+  }
+  try {
+    // DRY_RUN is the project-wide default (AGENTS.md) — rehearsal runs still
+    // write to the ledger for their own audit trail, but must never inflate
+    // the number a judge or stakeholder reads as real recovered revenue.
+    const result = await ledgerDb.query<{ total_recovered_usd: string | null; tickets_opened: string; actions_count: string }>(
+      `select
+         coalesce(sum(amount_usd) filter (where action_type = 'retry_eligible_charges' and outcome ->> 'dry_run' = 'false'), 0) as total_recovered_usd,
+         count(*) filter (where action_type = 'open_recovery_ticket' and outcome ->> 'dry_run' = 'false') as tickets_opened,
+         count(*) filter (where outcome ->> 'dry_run' = 'false') as actions_count
+       from public.recovery_ledger`,
+    );
+    const row = result.rows[0];
+    res.json({
+      total_recovered_usd: Number(row?.total_recovered_usd ?? 0),
+      tickets_opened: Number(row?.tickets_opened ?? 0),
+      actions_count: Number(row?.actions_count ?? 0),
+    });
+  } catch (err) {
+    console.error("[/stats] query failed:", err instanceof Error ? err.message : err);
+    res.status(503).json({ error: "stats temporarily unavailable" });
+  }
 });
 
 app.post("/mcp", requireBearerToken, async (req, res) => {
