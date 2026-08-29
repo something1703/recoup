@@ -25,14 +25,19 @@ create table if not exists public.customers (
   signup_date date not null
 );
 
--- IMPORTANT: the `id` column must hold REAL Stripe customer IDs, not placeholders.
--- Run scripts/seed-stripe-test-data.ts FIRST — it prints an INSERT block with real
--- IDs already filled in. The rows below are illustrative only.
+-- Real Stripe TEST-mode customer IDs, printed by scripts/seed-stripe-test-data.ts
+-- against the project's Stripe test-mode key and applied to the scratch Supabase
+-- project on 2026-08-29. Re-run the seed script and replace this block if the
+-- Stripe test data is ever reseeded (IDs regenerate on every run).
 insert into public.customers (id, name, plan, mrr_usd, ltv_tier, signup_date) values
-  ('cus_REPLACE_ME_01', 'Bramwell & Foss',     'enterprise', 2400, 'high',   '2023-02-11'),
-  ('cus_REPLACE_ME_02', 'Halcyon Robotics',    'growth',      620, 'high',   '2024-05-03'),
-  ('cus_REPLACE_ME_03', 'Petal & Co',          'starter',      49, 'low',    '2025-01-19'),
-  ('cus_REPLACE_ME_04', 'Northwind Analytics', 'growth',      340, 'medium', '2024-09-27')
+  ('cus_VA05dGTREwelwC', 'Bramwell & Foss', 'enterprise', 2400, 'high', '2026-08-29'),
+  ('cus_VA05hRYXWOI1By', 'Halcyon Robotics', 'growth', 620, 'high', '2026-08-29'),
+  ('cus_VA05uGoXTHlg6h', 'Petal & Co', 'starter', 49, 'low', '2026-08-29'),
+  ('cus_VA05o7Y2w3fnco', 'Northwind Analytics', 'growth', 340, 'medium', '2026-08-29'),
+  ('cus_VA050V3RKMfJ0s', 'Kestrel Studio', 'starter', 79, 'low', '2026-08-29'),
+  ('cus_VA0522HvpyRtiK', 'Fathom Insurance', 'enterprise', 3100, 'high', '2026-08-29'),
+  ('cus_VA05lBVZ9gFxoy', 'Marrow Coffee Co', 'starter', 29, 'low', '2026-08-29'),
+  ('cus_VA05qiFPX9VPgO', 'Underline Design', 'growth', 210, 'medium', '2026-08-29')
 on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------------
