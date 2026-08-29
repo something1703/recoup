@@ -82,9 +82,15 @@ create table if not exists public.recovery_ledger (
   human_decision text not null check (human_decision in ('allow', 'deny')),
   charge_ids text[],                -- populated for retry_eligible_charges
   linear_issue_id text,             -- populated for open_recovery_ticket
-  amount_usd numeric not null default 0,  -- recovered $ (retries) or $ at risk (tickets) — cockpit's Phase 9.7 stat sums this
   outcome jsonb not null            -- per-charge status array, or the created issue
 );
+
+-- CREATE TABLE IF NOT EXISTS above does nothing for a table that already
+-- existed before this column was added — this makes re-running the script
+-- against an already-provisioned project self-healing instead of silently
+-- leaving amount_usd missing. Recovered $ (retries) or $ at risk (tickets) —
+-- cockpit's Phase 9.7 stat sums this.
+alter table public.recovery_ledger add column if not exists amount_usd numeric not null default 0;
 
 -- ---------------------------------------------------------------------------
 -- Roles — two, matching the two consumers described above. Least privilege:

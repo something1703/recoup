@@ -83,11 +83,17 @@ const customersDb = CUSTOMERS_DB_URL ? new Pool({ connectionString: CUSTOMERS_DB
 const RECOVERY_LEDGER_DB_URL = process.env.RECOVERY_LEDGER_DB_URL;
 const ledgerDb = RECOVERY_LEDGER_DB_URL ? new Pool({ connectionString: RECOVERY_LEDGER_DB_URL, max: 3 }) : undefined;
 
-/**
- * Best-effort ledger write. Never throws — a ledger failure must not turn a
- * successfully-executed (and already human-approved) action into an error the
- * agent has to explain, and it must not block the tool's actual response.
- */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${String(ms)}ms`)), ms)),
+  ]);
+}
+
+// A slow or unreachable ledger DB must never turn an already-succeeded Stripe/
+// Linear action into a stalled response — bounded retry (short timeout, one
+// retry) instead of an unbounded await, and never throw: the real action
+// already happened, so a lost audit row is a worse outcome than a lost retry.
 async function recordLedgerEntry(entry: {
   actionType: "retry_eligible_charges" | "open_recovery_ticket";
   reason: string;
@@ -97,8 +103,8 @@ async function recordLedgerEntry(entry: {
   outcome: unknown;
 }): Promise<void> {
   if (!ledgerDb) return;
-  try {
-    await ledgerDb.query(
+  const attempt = () =>
+    ledgerDb.query(
       `insert into public.recovery_ledger
          (action_type, reason, human_decision, charge_ids, linear_issue_id, amount_usd, outcome)
        values ($1, $2, 'allow', $3, $4, $5, $6)`,
@@ -111,11 +117,42 @@ async function recordLedgerEntry(entry: {
         JSON.stringify(entry.outcome),
       ],
     );
+  // 'allow' is the only decision this server ever observes — TrueForge simply
+  // never calls the tool on Deny, so there is no path to record a denial here.
+  for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber++) {
+    try {
+      await withTimeout(attempt(), 1500);
+      return;
+    } catch (err) {
+      const isLastAttempt = attemptNumber === 2;
+      console.error(
+        `[recovery_ledger] write attempt ${String(attemptNumber)} failed${isLastAttempt ? " — giving up (non-fatal)" : ", retrying"}:`,
+        err instanceof Error ? err.message : err,
+      );
+      if (!isLastAttempt) await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+}
+
+// Guards Finding #9 (double-counting): a charge already credited as recovered
+// in a prior *live* run must not be counted again if the same batch is
+// resubmitted — Stripe itself is safe to re-confirm, but our own sum isn't.
+async function getAlreadyRecoveredChargeIds(): Promise<Set<string>> {
+  if (!ledgerDb) return new Set();
+  try {
+    const result = await withTimeout(
+      ledgerDb.query<{ charge_ids: string[] | null }>(
+        `select charge_ids from public.recovery_ledger
+         where action_type = 'retry_eligible_charges' and outcome ->> 'dry_run' = 'false'`,
+      ),
+      1500,
+    );
+    return new Set(result.rows.flatMap((row) => row.charge_ids ?? []));
   } catch (err) {
-    // 'allow' is the only decision this server ever observes — TrueForge simply
-    // never calls the tool on Deny, so there is no path to record a denial from
-    // in here. Log and move on; the approval itself already happened for real.
-    console.error("[recovery_ledger] write failed (non-fatal):", err instanceof Error ? err.message : err);
+    // Fail open on the read: worst case a genuine re-recovery is undercounted
+    // once, which is far better than blocking every retry on a ledger outage.
+    console.error("[recovery_ledger] dedup lookup failed (proceeding without it):", err instanceof Error ? err.message : err);
+    return new Set();
   }
 }
 
@@ -328,10 +365,16 @@ function buildServer(): McpServer {
           }
         }),
       );
-      // Only genuinely-succeeded charges count as "recovered" — an error result
-      // shouldn't inflate the ledger just because the batch was approved.
+      // Only a genuinely-paid result counts as "recovered" — confirm() can
+      // return requires_action/requires_payment_method/canceled without
+      // throwing, and only "paid" means an invoice actually collected.
+      const isRecovered = (r: { id: string; status: string | null }) =>
+        r.id.startsWith("in_") ? r.status === "paid" : r.status === "succeeded";
+      // A charge already credited in a prior live run must not be counted
+      // again if this exact batch gets resubmitted (Finding #9).
+      const alreadyRecovered = await getAlreadyRecoveredChargeIds();
       const recoveredUsd = liveResults
-        .filter((r) => r.status !== "error")
+        .filter((r) => isRecovered(r) && !alreadyRecovered.has(r.id))
         .reduce((sum, r) => sum + r.amount_usd, 0);
       await recordLedgerEntry({
         actionType: "retry_eligible_charges",
@@ -480,13 +523,7 @@ app.get("/healthz", (_req, res) => {
   res.json({ ok: true, dry_run: DRY_RUN });
 });
 
-/**
- * Aggregate-only, unauthenticated: the cockpit's recovery stat card (Phase 9.7)
- * reads this directly from the browser, so it must never carry the MCP bearer
- * token or any row-level detail (charge IDs, reasons) — only a running total.
- * CORS is open here specifically because this is the one endpoint a browser,
- * not TrueForge server-to-server, is meant to call.
- */
+// Public and aggregate-only so the cockpit's browser can call it directly — never row-level detail, never the MCP bearer token.
 app.get("/stats", async (_req, res) => {
   res.set("Access-Control-Allow-Origin", "*");
   if (!ledgerDb) {
@@ -494,11 +531,14 @@ app.get("/stats", async (_req, res) => {
     return;
   }
   try {
+    // DRY_RUN is the project-wide default (AGENTS.md) — rehearsal runs still
+    // write to the ledger for their own audit trail, but must never inflate
+    // the number a judge or stakeholder reads as real recovered revenue.
     const result = await ledgerDb.query<{ total_recovered_usd: string | null; tickets_opened: string; actions_count: string }>(
       `select
-         coalesce(sum(amount_usd) filter (where action_type = 'retry_eligible_charges'), 0) as total_recovered_usd,
-         count(*) filter (where action_type = 'open_recovery_ticket') as tickets_opened,
-         count(*) as actions_count
+         coalesce(sum(amount_usd) filter (where action_type = 'retry_eligible_charges' and outcome ->> 'dry_run' = 'false'), 0) as total_recovered_usd,
+         count(*) filter (where action_type = 'open_recovery_ticket' and outcome ->> 'dry_run' = 'false') as tickets_opened,
+         count(*) filter (where outcome ->> 'dry_run' = 'false') as actions_count
        from public.recovery_ledger`,
     );
     const row = result.rows[0];
