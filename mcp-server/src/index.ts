@@ -90,47 +90,73 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
-// A slow or unreachable ledger DB must never turn an already-succeeded Stripe/
-// Linear action into a stalled response — bounded retry (short timeout, one
-// retry) instead of an unbounded await, and never throw: the real action
-// already happened, so a lost audit row is a worse outcome than a lost retry.
-async function recordLedgerEntry(entry: {
+type LedgerEntry = {
   actionType: "retry_eligible_charges" | "open_recovery_ticket";
   reason: string;
   chargeIds?: string[];
   linearIssueId?: string;
   amountUsd: number;
   outcome: unknown;
-}): Promise<void> {
-  if (!ledgerDb) return;
-  const attempt = () =>
-    ledgerDb.query(
-      `insert into public.recovery_ledger
-         (action_type, reason, human_decision, charge_ids, linear_issue_id, amount_usd, outcome)
-       values ($1, $2, 'allow', $3, $4, $5, $6)`,
-      [
-        entry.actionType,
-        entry.reason,
-        entry.chargeIds ?? null,
-        entry.linearIssueId ?? null,
-        entry.amountUsd,
-        JSON.stringify(entry.outcome),
-      ],
-    );
+};
+
+function insertLedgerRow(entry: LedgerEntry) {
   // 'allow' is the only decision this server ever observes — TrueForge simply
   // never calls the tool on Deny, so there is no path to record a denial here.
-  for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber++) {
+  return ledgerDb!.query(
+    `insert into public.recovery_ledger
+       (action_type, reason, human_decision, charge_ids, linear_issue_id, amount_usd, outcome)
+     values ($1, $2, 'allow', $3, $4, $5, $6)`,
+    [entry.actionType, entry.reason, entry.chargeIds ?? null, entry.linearIssueId ?? null, entry.amountUsd, JSON.stringify(entry.outcome)],
+  );
+}
+
+// In-process durable-enough queue: an entry that fails its immediate write is
+// retried here indefinitely (not just once) until it succeeds, so a ledger
+// outage longer than the immediate bounded attempt still doesn't *permanently*
+// lose the audit row for an action that already succeeded for real — only
+// losable if this process itself dies with entries still queued, which a
+// full external outbox (Cloud Tasks, a queue table) would close but is more
+// infra than this project's audit trail warrants.
+const pendingLedgerEntries: LedgerEntry[] = [];
+let ledgerFlushTimer: NodeJS.Timeout | undefined;
+
+function scheduleLedgerFlush(): void {
+  if (ledgerFlushTimer) return;
+  ledgerFlushTimer = setInterval(() => {
+    void flushPendingLedgerEntries();
+  }, 10_000);
+}
+
+async function flushPendingLedgerEntries(): Promise<void> {
+  if (pendingLedgerEntries.length === 0) {
+    clearInterval(ledgerFlushTimer);
+    ledgerFlushTimer = undefined;
+    return;
+  }
+  const batch = pendingLedgerEntries.splice(0, pendingLedgerEntries.length);
+  for (const entry of batch) {
     try {
-      await withTimeout(attempt(), 1500);
-      return;
+      await withTimeout(insertLedgerRow(entry), 1500);
     } catch (err) {
-      const isLastAttempt = attemptNumber === 2;
-      console.error(
-        `[recovery_ledger] write attempt ${String(attemptNumber)} failed${isLastAttempt ? " — giving up (non-fatal)" : ", retrying"}:`,
-        err instanceof Error ? err.message : err,
-      );
-      if (!isLastAttempt) await new Promise((resolve) => setTimeout(resolve, 200));
+      console.error("[recovery_ledger] background retry still failing, re-queued:", err instanceof Error ? err.message : err);
+      pendingLedgerEntries.push(entry);
     }
+  }
+}
+
+// The immediate attempt is bounded (1.5s) so a slow ledger DB can't stall an
+// already-succeeded Stripe/Linear action's response — anything that doesn't
+// land immediately falls back to the background queue above instead of being
+// discarded, since the real action already happened and losing the audit row
+// is a worse outcome than a delayed one.
+async function recordLedgerEntry(entry: LedgerEntry): Promise<void> {
+  if (!ledgerDb) return;
+  try {
+    await withTimeout(insertLedgerRow(entry), 1500);
+  } catch (err) {
+    console.error("[recovery_ledger] immediate write failed, queued for background retry:", err instanceof Error ? err.message : err);
+    pendingLedgerEntries.push(entry);
+    scheduleLedgerFlush();
   }
 }
 
