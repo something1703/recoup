@@ -119,7 +119,7 @@ flowchart TD
 |---|---|---|
 | Client | React + `@truefoundry/trueforge-ui`, `SingleAgent` mode | A single-purpose product surface, not an agent browser — see `docs/UI_UX_SPEC.md` |
 | Application | Cloud Run (2 services: TrueForge server, `recoup-actions` MCP) | Serverless, scale-to-zero, deployable directly by an MCP server (see `docs/MCP_TOOLKIT.md`) |
-| Data | Supabase free tier, own scratch project, `@read-only` | Already a one-click OAuth catalog entry — no custom query tool needed |
+| Data | Supabase free tier, own scratch project, `@read-only` | One-click OAuth catalog entry for schema/project-metadata tools; actual row reads go through `get_customer_ltv` on `recoup-actions` — see gotcha #7, verified the catalog connector's own tools can't do this safely |
 | Cross-replica peering | Upstash Redis | Cloud Run + hosted mode with >1 replica needs Redis for streams/cancellations to follow the client; Upstash needs no VPC connector, unlike Memorystore |
 | Models | OpenAI + Gemini (Vertex-billed) | TrueForge's built-in Gemini provider targets the Gemini Developer API (a static key), not raw Vertex OAuth — see the gotcha below |
 | Execution | Daytona | The only sandbox provider TrueForge currently supports |
@@ -150,3 +150,13 @@ flowchart TD
 6. **Hosted-mode Agent Library isn't scoped per team member.** Anyone who can reach the
    TrueForge instance can open any saved agent. Keep every credential in connector
    configs and Secret Manager, never in agent `instructions`.
+7. **Supabase's official remote MCP server is a project-management API, not a data-query
+   tool.** Checked its real tools and annotations directly: `list_tables` returns schema,
+   not rows, and the only tool that can read row data, `execute_sql`, is correctly
+   annotated `destructiveHint: true, readOnlyHint: false` — same as `create_project`,
+   `deploy_edge_function`, `delete_branch`, etc. That means `enable_tools: ["@read-only"]`
+   on this connector (the plan this doc originally described) leaves the agent with *no*
+   way to read a customer row — not gated, genuinely absent. `get_customer_ltv` on
+   `recoup-actions` (a direct, narrow read via the `recoup_agent_readonly` Postgres role
+   from Phase 3) is the real path to that data; the Supabase connector stays attached for
+   schema/project-metadata tools only.

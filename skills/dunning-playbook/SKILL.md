@@ -25,8 +25,10 @@ findings rather than working through each source serially in the root agent's ow
 
 1. **Stripe segment sizer** — group the failed charges by decline code and by whether they
    cluster on one plan, one payment-method type, or one country.
-2. **Supabase value tiering** — join the affected customer IDs against the customer table
-   and tag each by `ltv_tier`.
+2. **Customer value tiering** — call `get_customer_ltv` with the affected customer IDs and
+   tag each by `ltv_tier`. (Not the Supabase connector's own tools — its only data-query
+   tool, `execute_sql`, is annotated destructive and excluded by this agent's read-only
+   restriction. `get_customer_ltv` is the narrow, safe path to the same data.)
 3. **Sentry error correlation** — search for an error spike or a new issue whose first-seen
    timestamp lines up with the start of the payment-failure spike.
 4. **GitHub deploy correlation** — check for a release or merged PR touching
@@ -54,7 +56,7 @@ LTV tiers that force human escalation regardless of dollar amount.
 Do not eyeball totals or counts from raw JSON in the conversation. Write a short Python
 script (Code Mode) that:
 
-1. Joins the failed-charge list against the customer table (Supabase) on customer ID.
+1. Joins the failed-charge list against the `get_customer_ltv` results on customer ID.
 2. Groups by decline code and by LTV tier.
 3. Prints: total $ at risk, $ safe-to-retry, $ requiring a human decision (per the LTV
    escalation rule), and the top 5 highest-value affected customers by name.

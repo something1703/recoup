@@ -25,7 +25,7 @@ happen.
 
 | Server | Used for | Why not use a generic one instead |
 |---|---|---|
-| **`recoup-actions`** (`mcp-server/`) | `retry_eligible_charges`, `open_recovery_ticket`, `get_dunning_thresholds` | Batch-shaped so one approval covers a whole segment (TrueForge doesn't yet support "approve once" for repeated calls), and scoped to exactly two gated actions rather than exposing Stripe's or Linear's full write surface |
+| **`recoup-actions`** (`mcp-server/`) | `retry_eligible_charges`, `open_recovery_ticket`, `get_dunning_thresholds`, `get_customer_ltv` | Batch-shaped so one approval covers a whole segment (TrueForge doesn't yet support "approve once" for repeated calls), and scoped to exactly two gated actions rather than exposing Stripe's or Linear's full write surface. `get_customer_ltv` exists because the Supabase catalog connector's own tools turned out **not** to cover this — checked directly (`docs/ARCHITECTURE.md` gotcha #7): its only data-query tool, `execute_sql`, is correctly annotated destructive, so `@read-only` leaves it with no working read path at all. |
 
 ## External, real, and worth using for the *build itself* (not the agent's own tools)
 
@@ -58,8 +58,11 @@ option for that job. Ask the human for access per `docs/ACCESS_CHECKLIST.md`.
    `recoup-actions` server for the pattern).
 3. Does it expose the narrowest tool set that does the job, or does adding it hand the
    agent more write/destructive capability than the task needs? If the latter, prefer a
-   scoped/read-only variant, or write a narrow custom tool instead (see `recoup-actions`
-   for why that was the right call for Supabase-adjacent data originally, before Supabase's
-   own catalog entry made it unnecessary).
+   scoped/read-only variant, or write a narrow custom tool instead — check the *actual*
+   tool annotations before assuming a catalog entry covers you: Supabase's own connector
+   looked sufficient on paper, but its only data-query tool is annotated destructive, so
+   `get_customer_ltv` on `recoup-actions` ended up being the real read path after all
+   (`docs/ARCHITECTURE.md` gotcha #7). Verify, don't assume, same as everywhere else in
+   this project.
 4. Check it's still live — hit its health endpoint or run one real tool call — before a
    phase depends on it.

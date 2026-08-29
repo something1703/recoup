@@ -34,6 +34,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { Pool } from "pg";
 import { z } from "zod";
 
 // Load .env for local dev. No-op when the file is absent (e.g. Cloud Run, where
@@ -57,6 +58,20 @@ const DRY_RUN = (process.env.DRY_RUN ?? "true").toLowerCase() !== "false";
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const LINEAR_API_KEY = process.env.LINEAR_API_KEY;
 const LINEAR_TEAM_KEY = process.env.LINEAR_TEAM_KEY ?? "OPS";
+
+// ---------------------------------------------------------------------------
+// Direct, narrow Postgres access to the customers table — see
+// docs/ARCHITECTURE.md gotcha #7: Supabase's own remote MCP server is a
+// project-management API (create/pause projects, run migrations, deploy edge
+// functions), not a data-query tool. Its only tool that can read row data,
+// execute_sql, is correctly annotated destructive/non-read-only, so
+// enable_tools: ["@read-only"] on that catalog connector leaves the agent with
+// no way to actually read a customer row. This connects with the
+// recoup_agent_readonly Postgres role (SELECT on customers only, verified in
+// Phase 3) instead — undefined when unset, so this tool degrades to an error
+// rather than crashing the whole server, since it's optional at start time.
+const CUSTOMERS_DB_URL = process.env.CUSTOMERS_DB_URL;
+const customersDb = CUSTOMERS_DB_URL ? new Pool({ connectionString: CUSTOMERS_DB_URL, max: 3 }) : undefined;
 
 // ---------------------------------------------------------------------------
 // Domain config the read-only tool exposes. In a real build this would live in
@@ -124,6 +139,42 @@ function buildServer(): McpServer {
     async () => ({
       content: [{ type: "text", text: JSON.stringify(DUNNING_THRESHOLDS, null, 2) }],
     }),
+  );
+
+  // --- Read-only tool: the actual customer-data read path -------------------
+  server.registerTool(
+    "get_customer_ltv",
+    {
+      title: "Get customer LTV data",
+      description:
+        "Look up plan, MRR, and LTV tier for a batch of Stripe customer IDs, joined from the " +
+        "business-data table. Use this instead of the Supabase connector's execute_sql tool — that " +
+        "tool is annotated destructive (it can run arbitrary SQL) and is excluded by this agent's " +
+        "@read-only restriction, so it cannot return row data even for a plain SELECT.",
+      inputSchema: {
+        customer_ids: z.array(z.string()).min(1).describe("Stripe customer IDs to look up."),
+      },
+      annotations: {
+        title: "Get customer LTV data",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ customer_ids }) => {
+      if (!customersDb) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: "CUSTOMERS_DB_URL is not configured — cannot query customer data." }],
+        };
+      }
+      const result = await customersDb.query(
+        "select id, name, plan, mrr_usd, ltv_tier from public.customers where id = any($1::text[])",
+        [customer_ids],
+      );
+      return { content: [{ type: "text", text: JSON.stringify(result.rows, null, 2) }] };
+    },
   );
 
   // --- Gated write tool: retries a batch of eligible charges ---------------
