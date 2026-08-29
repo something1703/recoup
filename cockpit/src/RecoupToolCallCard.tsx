@@ -34,6 +34,7 @@ const BANNER_COPY: Record<string, string> = {
   open_recovery_ticket: "🎫 This files a real engineering ticket — review before approving.",
 };
 
+// Checks both tool name and server so this can never misfire on some unrelated future connector that happens to share a tool name.
 export function RecoupToolCallCard(props: ToolCallCardProps) {
   const isHighStakes = HIGH_STAKES_TOOLS.has(props.toolName) && props.mcpServerName === HIGH_STAKES_SERVER;
   if (!isHighStakes) {
