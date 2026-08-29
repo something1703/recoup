@@ -31,3 +31,13 @@ body,
   padding: 8px 14px;
   border-bottom: 1px solid #e9c46a;
 }
+
+/* Phase 9.4: a judge (or anyone) must be able to Tab to Allow/Deny, not only
+   click — target every focusable control the SDK renders inside the approval
+   slot generically, since its internal class names aren't part of our API
+   surface and shouldn't be relied on. */
+.recoup-approval-spotlight button:focus-visible,
+.recoup-approval-spotlight [role="button"]:focus-visible {
+  outline: 3px solid #b8860b;
+  outline-offset: 2px;
+}
