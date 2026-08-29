@@ -47,6 +47,14 @@ Manager are the only places any of these should live).
 - [ ] Nothing new — Phase 5 reuses the Stripe/Linear credentials above, plus the GCP
       project from Phase 2.
 
+## Before Phase 6
+
+- [ ] **A Daytona account and API key** — free tier. Missed in the original checklist:
+      skills and Code Mode both require a configured sandbox provider before an agent
+      referencing either can even be created (`PUT /settings/sandbox-providers`), not
+      just before Phase 7's orchestration work — found this the hard way trying to
+      create the `recoup` agent itself.
+
 ## Before Phase 9
 
 - [ ] **A domain or subdomain** (optional) — if you want the cockpit and the TrueForge
