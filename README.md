@@ -85,18 +85,29 @@ what access the human needs to provide, and exit criteria. Work them in order �
 
 ## Qodo Code Review Evidence
 
-*(Fill in once a real PR exists — see `docs/CODE_QUALITY_BAR.md` for the required format.)*
-
-```markdown
-- PR: <link to a representative merged PR with real hackathon code>
-- What Qodo surfaced: <1–2 sentences — a real finding, and what you did about it>
-- Review trail: initial review → decision → follow-up review, visible on the PR thread.
-```
+- PR: [#6 — Multi-tenant revenue platform: real Telco Churn data + account-health desk](https://github.com/something1703/recoup/pull/6)
+- What Qodo surfaced: across three review rounds, 10 findings — all High severity, all
+  fixed, not dismissed. The two worth calling out: `scripts/migrate-multi-tenant.sql`'s
+  rerun guard could roll back its own non-destructive setup before reaching the guarded
+  section, silently breaking idempotency on an already-migrated database; and
+  `scripts/score-account-health-eval.ts` filtered out every `dry_run=true` ledger row,
+  which — since dry-run is this project's default — meant a normal evaluation run scored
+  every real classification as a false negative. Both fixed and re-verified.
+- Review trail: three rounds (initial review → fixes → follow-up review, three times) all
+  visible on the PR thread, ending with every finding marked resolved and a clean,
+  conflict-free merge state.
 
 ## Status
 
-Scaffolded and verified: `mcp-server/` (builds, type-checks, smoke-tested against a live
-MCP handshake), `cockpit/` (builds, type-checks against the real published
-`@truefoundry/trueforge-ui`), `skills/dunning-playbook/SKILL.md`, `agent-spec.json`, and
-the demo-data seed scripts. Everything else is planned in `docs/phases/` and not yet
-built — that's the work ahead.
+Live, not just scaffolded. `mcp-server/` runs as `recoup-actions` on Cloud Run — its own
+bearer-token auth confirmed rejecting unauthenticated/invalid requests, tenant-scoped
+tools backed by real Postgres (Supabase), a public aggregate-only `/stats` endpoint.
+`cockpit/` is deployed and drives a real TrueForge session end to end: verified live by
+scripting an actual investigation through the browser — the agent reads the
+`dunning-playbook` skill, calls real Stripe test-mode tools, and stops on a genuine
+tool-approval gate before proceeding, exactly as `agent-spec.json` configures it. Three
+skills exist (`dunning-playbook`, `refund-abuse-playbook`, `account-health-playbook`)
+against a real, held-out IBM Telco Customer Churn population, scored by
+`scripts/score-account-health-eval.ts`. `landing/` is deployed with the full case-file
+design system. See `docs/DEMO_SCRIPT.md` for the walkthrough and `docs/PHASE_MAP.md` for
+what's still open.

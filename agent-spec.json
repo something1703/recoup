@@ -14,11 +14,6 @@
       "preload": true
     },
     {
-      "name": "supabase",
-      "enable_tools": ["@read-only"],
-      "preload": true
-    },
-    {
       "name": "linear",
       "enable_tools": ["@all"],
       "require_approval_for_tools": ["@write", "@destructive"],
