@@ -84,6 +84,12 @@ Then create an agent named `recoup` in TrueForge from [`agent-spec.json`](./agen
 cd landing && npm ci && npm run dev   # http://localhost:5174
 ```
 
+**The pager** (optional — the agent starts itself): `scripts/patrol-dunning.ts` watches a
+tenant's failed-charge count and opens the investigation session on breach, with no human
+prompt. Self-triggered is not self-approved — the session still stops at the same
+Allow/Deny gates. `npx tsx scripts/patrol-dunning.ts --simulate` fires one immediately for
+a rehearsal.
+
 ## What TrueForge and Qodo are doing, concretely
 
 - **TrueForge** runs the whole agent loop: the model, tool calls, four-way parallel

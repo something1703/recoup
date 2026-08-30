@@ -27,9 +27,12 @@ not part of the core video:
 - **The skill swap** (Phase 6.6/10.2): same agent, same tools, same cockpit, running
   `refund-abuse-playbook` instead of `dunning-playbook`. This is the "pattern, not a
   payments bot" claim from the README, proven in under 20 seconds.
-- **The self-triggered investigation**, if Phase 7.5 gets built: a session that starts
-  itself off a Stripe threshold breach, with no human prompt at all — the strongest
-  single clip for "this is an agent, not a tool you remember to open."
+- **The self-triggered investigation** — built: `scripts/patrol-dunning.ts` watches the
+  failed-charge count against a threshold and, on breach, opens the investigation
+  session itself, no human prompt (run it with `--simulate` on camera; the session
+  appears in the cockpit's chat history mid-narration). The strongest single clip for
+  "this is an agent, not a tool you remember to open" — and say the line that matters:
+  self-triggered is not self-approved; it still stops at the same Allow/Deny gates.
 - **The eval harness results** (Phase 7.4): a scored table, per model, of delegation
   correctness / $ accuracy / never-retry compliance. Not a video clip — this is the
   citable hook for the blog post, stronger than a prose "it worked."
