@@ -27,3 +27,10 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Other-harness copies of the impeccable skill (.claude/ is the one this session uses)
+.agent/
+.agents/
+.codex/
+.gemini/
+.impeccable/
