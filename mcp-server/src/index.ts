@@ -6,9 +6,11 @@
  *
  * Why this exists: the shipped Stripe / Linear MCP servers expose Stripe's and Linear's
  * full, generic APIs. For the Recoup agent we want exactly TWO high-level, batch-shaped
- * write actions the harness can gate behind a single human approval, plus one safe
- * read-only tool. Building this ourselves (rather than composing raw Stripe/Linear calls
- * in a loop) means:
+ * write actions the harness can gate behind a single human approval, plus a small set of
+ * safe read-only tools (customer LTV, account usage, per-tenant dunning policy — all
+ * scoped by company_id, since Recoup runs recovery for multiple tenant companies, not
+ * one). Building this ourselves (rather than composing raw Stripe/Linear calls in a
+ * loop) means:
  *
  *   1. ONE approval per batch, not one per charge — TrueForge does not yet support
  *      "approve once" for repeated calls (see /roadmap), so a tool that takes an array
@@ -91,6 +93,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 type LedgerEntry = {
+  companyId: string;
   actionType: "retry_eligible_charges" | "open_recovery_ticket";
   reason: string;
   chargeIds?: string[];
@@ -104,9 +107,9 @@ function insertLedgerRow(entry: LedgerEntry) {
   // never calls the tool on Deny, so there is no path to record a denial here.
   return ledgerDb!.query(
     `insert into public.recovery_ledger
-       (action_type, reason, human_decision, charge_ids, linear_issue_id, amount_usd, outcome)
-     values ($1, $2, 'allow', $3, $4, $5, $6)`,
-    [entry.actionType, entry.reason, entry.chargeIds ?? null, entry.linearIssueId ?? null, entry.amountUsd, JSON.stringify(entry.outcome)],
+       (action_type, reason, human_decision, charge_ids, linear_issue_id, amount_usd, outcome, company_id)
+     values ($1, $2, 'allow', $3, $4, $5, $6, $7)`,
+    [entry.actionType, entry.reason, entry.chargeIds ?? null, entry.linearIssueId ?? null, entry.amountUsd, JSON.stringify(entry.outcome), entry.companyId],
   );
 }
 
@@ -183,22 +186,36 @@ async function getAlreadyRecoveredChargeIds(): Promise<Set<string>> {
 }
 
 // ---------------------------------------------------------------------------
-// Domain config the read-only tool exposes. In a real build this would live in
-// the "dunning-playbook" skill or a small config table — it's inlined here so
-// the starter kit has zero required external state to run.
+// Per-tenant dunning policy — Recoup runs recovery for multiple companies
+// (see public.companies), and each tenant's real revenue distribution needs
+// its own thresholds: comp_arcline_software's $500 "always escalate" cutoff
+// makes sense for a SaaS business billing up to $3,100/mo, but comp_meridian_
+// telecom's real subscriber base tops out at $118.75/mo (verified against the
+// actual dataset), so the SAME cutoff would silently never fire for its
+// highest-value accounts. Read from public.dunning_policy (keyed by
+// company_id), not a hardcoded constant — this used to be inlined here "so
+// the starter kit has zero required external state to run," but every other
+// tool already hard-requires customersDb/ledgerDb, so that tradeoff no
+// longer buys anything.
 // ---------------------------------------------------------------------------
-const DUNNING_THRESHOLDS = {
-  max_auto_retry_attempts: 2,
-  never_retry_decline_codes: ["stolen_card", "lost_card", "pickup_card", "fraudulent"],
-  safe_to_retry_decline_codes: ["insufficient_funds", "do_not_honor", "processing_error", "try_again_later"],
-  retry_backoff_hours: [24, 72],
-  ltv_tiers: {
-    high: { min_mrr_usd: 500, escalate_to_human_always: true },
-    medium: { min_mrr_usd: 100 },
-    low: { min_mrr_usd: 0 },
-  },
-  updated_at: "2026-08-01",
-} as const;
+type DunningPolicy = {
+  max_auto_retry_attempts: number;
+  never_retry_decline_codes: string[];
+  safe_to_retry_decline_codes: string[];
+  retry_backoff_hours: number[];
+  ltv_tiers: Record<string, { min_mrr_usd: number; escalate_to_human_always?: boolean }>;
+  updated_at: string;
+};
+
+async function getDunningPolicy(pool: Pool, companyId: string): Promise<DunningPolicy | undefined> {
+  const result = await pool.query<DunningPolicy>(
+    `select max_auto_retry_attempts, never_retry_decline_codes, safe_to_retry_decline_codes,
+            retry_backoff_hours, ltv_tiers, updated_at::text
+     from public.dunning_policy where company_id = $1`,
+    [companyId],
+  );
+  return result.rows[0];
+}
 
 // ---------------------------------------------------------------------------
 // Linear's IssueCreateInput.teamId requires a resolved team UUID — team_key /
@@ -233,10 +250,13 @@ function buildServer(): McpServer {
     {
       title: "Get dunning thresholds",
       description:
-        "Return the org's dunning/retry policy: which decline codes are safe to retry, which must " +
+        "Return one company's dunning/retry policy: which decline codes are safe to retry, which must " +
         "never be retried, max retry attempts, backoff schedule, and LTV tiers used to decide when a " +
-        "human must be looped in regardless of $ amount.",
-      inputSchema: {},
+        "human must be looped in regardless of $ amount. Thresholds are tenant-specific — always pass " +
+        "the company_id you are currently investigating, never assume another tenant's numbers apply.",
+      inputSchema: {
+        company_id: z.string().describe("The tenant company to fetch policy for, e.g. comp_arcline_software."),
+      },
       annotations: {
         title: "Get dunning thresholds",
         readOnlyHint: true,
@@ -245,9 +265,16 @@ function buildServer(): McpServer {
         openWorldHint: false,
       },
     },
-    async () => ({
-      content: [{ type: "text", text: JSON.stringify(DUNNING_THRESHOLDS, null, 2) }],
-    }),
+    async ({ company_id }) => {
+      if (!customersDb) {
+        return { isError: true, content: [{ type: "text", text: "CUSTOMERS_DB_URL is not configured — cannot query policy data." }] };
+      }
+      const policy = await getDunningPolicy(customersDb, company_id);
+      if (!policy) {
+        return { isError: true, content: [{ type: "text", text: `No dunning_policy row for company_id "${company_id}".` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(policy, null, 2) }] };
+    },
   );
 
   // --- Read-only tool: the actual customer-data read path -------------------
@@ -256,12 +283,15 @@ function buildServer(): McpServer {
     {
       title: "Get customer LTV data",
       description:
-        "Look up plan, MRR, and LTV tier for a batch of Stripe customer IDs, joined from the " +
-        "business-data table. Use this instead of the Supabase connector's execute_sql tool — that " +
-        "tool is annotated destructive (it can run arbitrary SQL) and is excluded by this agent's " +
-        "@read-only restriction, so it cannot return row data even for a plain SELECT.",
+        "Look up plan, MRR, and LTV tier for a batch of customer IDs within ONE tenant company, joined " +
+        "from the business-data table. Use this instead of the Supabase connector's execute_sql tool — " +
+        "that tool is annotated destructive (it can run arbitrary SQL) and is excluded by this agent's " +
+        "@read-only restriction, so it cannot return row data even for a plain SELECT. Capped at 50 IDs " +
+        "per call by design — this data lands in your own context, so request a specific working set " +
+        "(the batch you're actually about to classify or retry), not an entire tenant's population.",
       inputSchema: {
-        customer_ids: z.array(z.string()).min(1).describe("Stripe customer IDs to look up."),
+        company_id: z.string().describe("The tenant company these customer IDs belong to."),
+        customer_ids: z.array(z.string()).min(1).max(50).describe("Customer IDs to look up (max 50 per call)."),
       },
       annotations: {
         title: "Get customer LTV data",
@@ -271,7 +301,7 @@ function buildServer(): McpServer {
         openWorldHint: false,
       },
     },
-    async ({ customer_ids }) => {
+    async ({ company_id, customer_ids }) => {
       if (!customersDb) {
         return {
           isError: true,
@@ -279,8 +309,51 @@ function buildServer(): McpServer {
         };
       }
       const result = await customersDb.query(
-        "select id, name, plan, mrr_usd, ltv_tier from public.customers where id = any($1::text[])",
-        [customer_ids],
+        "select id, name, plan, mrr_usd, ltv_tier from public.customers where company_id = $1 and id = any($2::text[])",
+        [company_id, customer_ids],
+      );
+      return { content: [{ type: "text", text: JSON.stringify(result.rows, null, 2) }] };
+    },
+  );
+
+  // --- Read-only tool: account-health signals (usage OR real subscriber attributes) ---
+  server.registerTool(
+    "get_account_usage",
+    {
+      title: "Get account usage / health signals",
+      description:
+        "Look up the observable health signals for a batch of customer IDs within ONE tenant company — " +
+        "used to judge renewal/expansion risk, NOT to look up a known outcome. Different tenants expose " +
+        "different signals depending on their business: SaaS tenants (e.g. comp_arcline_software) return " +
+        "seat/API usage from product telemetry; comp_meridian_telecom returns real subscriber attributes " +
+        "(tenure, contract type, payment method, total lifetime charges) instead — it has no seats or API " +
+        "quota. Fields that don't apply to a given tenant come back null; do not treat a null as zero. " +
+        "Capped at 50 IDs per call — pull a specific shortlist to reason about, not a whole tenant.",
+      inputSchema: {
+        company_id: z.string().describe("The tenant company these customer IDs belong to."),
+        customer_ids: z.array(z.string()).min(1).max(50).describe("Customer IDs to look up (max 50 per call)."),
+      },
+      annotations: {
+        title: "Get account usage / health signals",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ company_id, customer_ids }) => {
+      if (!customersDb) {
+        return { isError: true, content: [{ type: "text", text: "CUSTOMERS_DB_URL is not configured — cannot query usage data." }] };
+      }
+      const result = await customersDb.query(
+        `select
+           c.id, c.name, c.ltv_tier, c.mrr_usd,
+           c.tenure_months, c.contract_type, c.payment_method, c.total_charges_usd,
+           u.seats_included, u.seats_used, u.api_quota_30d, u.api_calls_30d, u.last_active_date
+         from public.customers c
+         left join public.product_usage u on u.customer_id = c.id
+         where c.company_id = $1 and c.id = any($2::text[])`,
+        [company_id, customer_ids],
       );
       return { content: [{ type: "text", text: JSON.stringify(result.rows, null, 2) }] };
     },
@@ -299,6 +372,7 @@ function buildServer(): McpServer {
         "Moves real money when DRY_RUN is off — this call is annotated destructive and MUST be gated " +
         "behind human approval in the agent spec (require_approval_for_tools).",
       inputSchema: {
+        company_id: z.string().describe("The tenant company these charges belong to — its dunning_policy governs the never-retry check below."),
         charges: z
           .array(
             z.object({
@@ -311,7 +385,8 @@ function buildServer(): McpServer {
             }),
           )
           .min(1)
-          .describe("Batch of charges to retry, each with the decline code it failed with."),
+          .max(50)
+          .describe("Batch of charges to retry, each with the decline code it failed with (max 50 per call — one approval per batch, not one per charge)."),
         reason: z.string().describe("One-sentence justification the agent generated for this batch."),
       },
       annotations: {
@@ -322,10 +397,20 @@ function buildServer(): McpServer {
         openWorldHint: true,
       },
     },
-    async ({ charges, reason }) => {
-      // Hard block, independent of the caller's classification — dunning-playbook step 4:
-      // never retry these codes under any circumstance, even if the batch was approved.
-      const neverRetry = new Set<string>(DUNNING_THRESHOLDS.never_retry_decline_codes);
+    async ({ company_id, charges, reason }) => {
+      if (!ledgerDb) {
+        return { isError: true, content: [{ type: "text", text: "RECOVERY_LEDGER_DB_URL is not configured — cannot verify dunning policy independently." }] };
+      }
+      // Independent server-side check, deliberately using the actions-service
+      // pool (not customersDb) — this is the server's own belt-and-suspenders
+      // verification against DB-backed policy, not a trust of the agent's
+      // claimed classification. Hard block: never retry these codes under any
+      // circumstance, even if the batch was approved.
+      const policy = await getDunningPolicy(ledgerDb, company_id);
+      if (!policy) {
+        return { isError: true, content: [{ type: "text", text: `No dunning_policy row for company_id "${company_id}" — refusing to guess at never-retry codes.` }] };
+      }
+      const neverRetry = new Set<string>(policy.never_retry_decline_codes);
       const blocked = charges.filter((c) => neverRetry.has(c.decline_code));
       const eligible = charges.filter((c) => !neverRetry.has(c.decline_code));
       const blockedResults = blocked.map((c) => ({
@@ -338,6 +423,7 @@ function buildServer(): McpServer {
         const results = eligible.map((c) => ({ id: c.charge_id, status: "simulated_retry_success" as const }));
         const amountUsd = eligible.reduce((sum, c) => sum + c.amount_usd, 0);
         await recordLedgerEntry({
+          companyId: company_id,
           actionType: "retry_eligible_charges",
           reason,
           chargeIds: eligible.map((c) => c.charge_id),
@@ -403,6 +489,7 @@ function buildServer(): McpServer {
         .filter((r) => isRecovered(r) && !alreadyRecovered.has(r.id))
         .reduce((sum, r) => sum + r.amount_usd, 0);
       await recordLedgerEntry({
+        companyId: company_id,
         actionType: "retry_eligible_charges",
         reason,
         chargeIds: eligible.map((c) => c.charge_id),
@@ -429,6 +516,7 @@ function buildServer(): McpServer {
         "File a Linear issue for a payment-failure root cause that looks like an internal bug " +
         "(webhook/integration error, not a customer's card) rather than something the agent should retry.",
       inputSchema: {
+        company_id: z.string().describe("The tenant company this ticket is about."),
         title: z.string(),
         description: z.string().describe("Root-cause summary with evidence: linked Sentry issue, affected charge IDs, $ at risk."),
         priority: z.enum(["urgent", "high", "medium", "low"]).default("high"),
@@ -437,6 +525,15 @@ function buildServer(): McpServer {
           .number()
           .nonnegative()
           .describe("The $ at risk for this segment, from the same sandbox computation that sized it. Recorded for the recovery ledger."),
+        customer_ids: z
+          .array(z.string())
+          .max(100)
+          .optional()
+          .describe(
+            "Optional: the specific customer IDs this ticket flags (e.g. accounts an account-health review classified as at-risk). " +
+              "Not needed for a pure engineering bug ticket. Recorded on the ledger so a classification can later be scored against " +
+              "a real recorded outcome, not eyeballed.",
+          ),
       },
       annotations: {
         title: "Open recovery ticket",
@@ -446,15 +543,16 @@ function buildServer(): McpServer {
         openWorldHint: true,
       },
     },
-    async ({ title, description, priority, team_key, amount_at_risk_usd }) => {
+    async ({ company_id, title, description, priority, team_key, amount_at_risk_usd, customer_ids }) => {
       if (DRY_RUN || !LINEAR_API_KEY) {
         const simulatedIssue = { id: `SIM-${randomUUID().slice(0, 8)}`, title, priority, team_key: team_key ?? LINEAR_TEAM_KEY };
         await recordLedgerEntry({
+          companyId: company_id,
           actionType: "open_recovery_ticket",
           reason: description,
           linearIssueId: simulatedIssue.id,
           amountUsd: amount_at_risk_usd,
-          outcome: { dry_run: true, simulated_issue: simulatedIssue },
+          outcome: { dry_run: true, simulated_issue: simulatedIssue, customer_ids: customer_ids ?? null },
         });
         return {
           content: [
@@ -508,11 +606,12 @@ function buildServer(): McpServer {
           };
         }
         await recordLedgerEntry({
+          companyId: company_id,
           actionType: "open_recovery_ticket",
           reason: description,
           linearIssueId: issueCreate.issue?.identifier ?? issueCreate.issue?.id,
           amountUsd: amount_at_risk_usd,
-          outcome: { dry_run: false, issue: issueCreate.issue },
+          outcome: { dry_run: false, issue: issueCreate.issue, customer_ids: customer_ids ?? null },
         });
         return {
           content: [{ type: "text", text: JSON.stringify({ dry_run: false, issue: issueCreate.issue }, null, 2) }],
@@ -550,12 +649,14 @@ app.get("/healthz", (_req, res) => {
 });
 
 // Public and aggregate-only so the cockpit's browser can call it directly — never row-level detail, never the MCP bearer token.
-app.get("/stats", async (_req, res) => {
+// Optional ?company_id= scopes to one tenant; omitted, it aggregates across all of them.
+app.get("/stats", async (req, res) => {
   res.set("Access-Control-Allow-Origin", "*");
   if (!ledgerDb) {
     res.json({ total_recovered_usd: 0, tickets_opened: 0, actions_count: 0 });
     return;
   }
+  const companyId = typeof req.query.company_id === "string" ? req.query.company_id : undefined;
   try {
     // DRY_RUN is the project-wide default (AGENTS.md) — rehearsal runs still
     // write to the ledger for their own audit trail, but must never inflate
@@ -565,7 +666,9 @@ app.get("/stats", async (_req, res) => {
          coalesce(sum(amount_usd) filter (where action_type = 'retry_eligible_charges' and outcome ->> 'dry_run' = 'false'), 0) as total_recovered_usd,
          count(*) filter (where action_type = 'open_recovery_ticket' and outcome ->> 'dry_run' = 'false') as tickets_opened,
          count(*) filter (where outcome ->> 'dry_run' = 'false') as actions_count
-       from public.recovery_ledger`,
+       from public.recovery_ledger
+       where $1::text is null or company_id = $1`,
+      [companyId ?? null],
     );
     const row = result.rows[0];
     res.json({
