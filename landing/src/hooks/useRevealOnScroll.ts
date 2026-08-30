@@ -24,7 +24,16 @@ export default function useRevealOnScroll<T extends HTMLElement>() {
       { threshold: 0.15 },
     );
     observer.observe(node);
-    return () => observer.disconnect();
+    // Safety net: this is primary content, not decoration — a full-page
+    // capture tool, a print view, or the observer simply never firing must
+    // never leave it permanently invisible. Confirmed live: Playwright's
+    // fullPage screenshot (no real scroll) never intersects anything below
+    // the fold, hiding entire sections with no way to recover them.
+    const fallback = setTimeout(() => setRevealed(true), 2500);
+    return () => {
+      observer.disconnect();
+      clearTimeout(fallback);
+    };
   }, []);
 
   return { ref, revealed };
