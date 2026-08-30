@@ -2,7 +2,7 @@ import { TrueForgeUI } from "@truefoundry/trueforge-ui";
 import { IncidentBanner } from "./IncidentBanner";
 import { RecoupToolCallCard } from "./RecoupToolCallCard";
 import { RecoveryStatCard } from "./RecoveryStatCard";
-import { RecoupWelcomeScreen } from "./RecoupWelcomeScreen";
+import { DeskPrompts } from "./DeskPrompts";
 
 // Local-mode default per docs/quickstart.mdx. Override with VITE_TRUEFORGE_BASE_URL
 // when pointed at a hosted-mode deployment (http://localhost:8791) or a real domain.
@@ -17,6 +17,7 @@ export default function App() {
     <div className="h-full min-h-0 flex flex-col">
       <IncidentBanner />
       <RecoveryStatCard />
+      <DeskPrompts />
       <TrueForgeUI
         server={{ type: "trueforge", baseUrl: TRUEFORGE_BASE_URL }}
         layout="sidebar"
@@ -33,7 +34,7 @@ export default function App() {
             successText: "#0f6b3f",
           },
         }}
-        overrides={{ ToolCallCard: RecoupToolCallCard, WelcomeScreen: RecoupWelcomeScreen }}
+        overrides={{ ToolCallCard: RecoupToolCallCard }}
         className="flex-1 min-h-0"
         onError={(error) => console.error("Recoup Cockpit runtime error:", error)}
       />
