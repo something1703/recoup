@@ -21,6 +21,19 @@ const heroItem = {
   hidden: { opacity: 0, y: 22 },
   show: { opacity: 1, y: 0, transition: { duration: 0.55, ease: [0.22, 1, 0.36, 1] as const } },
 };
+// Exhibit A doesn't fade in like the rest of the case file — it gets stamped
+// down: oversized and airborne, then slammed to its resting rotation with an
+// underdamped spring so it lands with a little physical wobble.
+const stampSlam = {
+  hidden: { opacity: 0, scale: 2.6, rotate: -3, y: -14 },
+  show: {
+    opacity: 1,
+    scale: 1,
+    rotate: -3,
+    y: 0,
+    transition: { type: "spring" as const, stiffness: 260, damping: 13, mass: 0.9 },
+  },
+};
 
 export default function Home() {
   return (
@@ -39,7 +52,7 @@ export default function Home() {
           initial="hidden"
           animate="show"
         >
-          <motion.div variants={heroItem} className="stamp text-stamp text-2xl md:text-4xl mb-6 inline-block w-fit">
+          <motion.div variants={stampSlam} className="stamp text-stamp text-2xl md:text-4xl mb-6 inline-block w-fit">
             Exhibit A
           </motion.div>
           <motion.h1 variants={heroItem} className="font-stamp text-4xl md:text-6xl lg:text-7xl leading-[1.05] max-w-4xl">
