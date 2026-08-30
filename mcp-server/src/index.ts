@@ -920,7 +920,12 @@ function requireBearerToken(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
-app.get("/healthz", (_req, res) => {
+// Both paths on purpose: Google's frontend reserves the literal /healthz on
+// *.run.app and serves its own 404 before the request reaches this container
+// (verified live — /healthz gets GFE's 404 page, every other path reaches
+// Express). /health is the one that works on Cloud Run; /healthz kept for
+// local/other hosts.
+app.get(["/health", "/healthz"], (_req, res) => {
   res.json({ ok: true, dry_run: DRY_RUN });
 });
 
