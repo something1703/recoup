@@ -42,6 +42,8 @@ const SUBSCRIPTIONS = [
   { id: "cus_VA05qiFPX9VPgO", name: "Underline Design", db_mrr: 210, stripe_mrr: 210 },
 ] as const;
 
+// One shared Product with a per-customer Price: mirrors how a real SaaS bills
+// different accounts different amounts off one plan, without needing N products.
 async function main() {
   const product = await stripe.products.create({ name: "Recoup Demo SaaS Plan" });
 

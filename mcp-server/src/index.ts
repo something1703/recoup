@@ -185,6 +185,34 @@ async function getAlreadyRecoveredChargeIds(): Promise<Set<string>> {
   }
 }
 
+// Records that get_account_usage was asked about these customers — this is
+// what lets scripts/score-account-health-eval.ts score precision/recall over
+// the accounts the agent actually reviewed, instead of silently treating
+// every one of the ~7,000 real Meridian customers it never looked at as a
+// "predicted healthy" negative. Best-effort and non-blocking: losing a review
+// log entry only slightly undercounts the eval's reviewed set, unlike a
+// recovery_ledger entry, so this doesn't need the durable retry-queue
+// machinery recordLedgerEntry uses for real financial actions.
+async function recordAccountHealthReviews(companyId: string, customerIds: string[]): Promise<void> {
+  if (!ledgerDb || customerIds.length === 0) return;
+  try {
+    const values = customerIds.map((_, i) => `($${String(i * 2 + 1)}, $${String(i * 2 + 2)})`).join(",");
+    const params = customerIds.flatMap((id) => [id, companyId]);
+    await withTimeout(
+      ledgerDb.query(
+        `insert into public.account_health_reviews (customer_id, company_id)
+         values ${values}
+         on conflict (customer_id) do update
+           set last_reviewed_at = now(), review_count = account_health_reviews.review_count + 1`,
+        params,
+      ),
+      1500,
+    );
+  } catch (err) {
+    console.error("[account_health_reviews] best-effort log failed (not retried):", err instanceof Error ? err.message : err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Per-tenant dunning policy — Recoup runs recovery for multiple companies
 // (see public.companies), and each tenant's real revenue distribution needs
@@ -316,6 +344,62 @@ function buildServer(): McpServer {
     },
   );
 
+  // --- Read-only tool: discover which customer IDs to investigate ---------
+  server.registerTool(
+    "list_customers",
+    {
+      title: "List customers for a tenant",
+      description:
+        "Discover a bounded, filtered shortlist of customer IDs for ONE tenant company — the starting " +
+        "point when you don't already have specific IDs in hand (e.g. from a Stripe failed-charge or " +
+        "refund list). Not every tenant's customers exist in Stripe: comp_meridian_telecom's real " +
+        "subscriber population is DB-only, so this is the ONLY way to find its customer IDs — Stripe's " +
+        "own tools will not surface them. Always filtered and capped (max 50, default 20) — never returns " +
+        "a whole tenant's population; narrow with ltv_tier / contract_type or raise the limit deliberately, " +
+        "never loop calling this to enumerate everyone.",
+      inputSchema: {
+        company_id: z.string().describe("The tenant company to list customers for."),
+        ltv_tier: z.enum(["high", "medium", "low"]).optional().describe("Filter to one LTV tier."),
+        contract_type: z
+          .string()
+          .optional()
+          .describe("Filter to an exact contract_type value — only populated for some tenants (e.g. comp_meridian_telecom's 'Month-to-month', 'One year', 'Two year')."),
+        limit: z.number().int().min(1).max(50).default(20).describe("Max rows to return (default 20, max 50)."),
+      },
+      annotations: {
+        title: "List customers for a tenant",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ company_id, ltv_tier, contract_type, limit }) => {
+      if (!customersDb) {
+        return { isError: true, content: [{ type: "text", text: "CUSTOMERS_DB_URL is not configured — cannot query customer data." }] };
+      }
+      const conditions = ["company_id = $1"];
+      const params: unknown[] = [company_id];
+      if (ltv_tier) {
+        params.push(ltv_tier);
+        conditions.push(`ltv_tier = $${String(params.length)}`);
+      }
+      if (contract_type) {
+        params.push(contract_type);
+        conditions.push(`contract_type = $${String(params.length)}`);
+      }
+      params.push(limit);
+      const result = await customersDb.query(
+        `select id, name, plan, mrr_usd, ltv_tier from public.customers
+         where ${conditions.join(" and ")}
+         order by mrr_usd desc
+         limit $${String(params.length)}`,
+        params,
+      );
+      return { content: [{ type: "text", text: JSON.stringify(result.rows, null, 2) }] };
+    },
+  );
+
   // --- Read-only tool: account-health signals (usage OR real subscriber attributes) ---
   server.registerTool(
     "get_account_usage",
@@ -354,6 +438,10 @@ function buildServer(): McpServer {
          left join public.product_usage u on u.customer_id = c.id
          where c.company_id = $1 and c.id = any($2::text[])`,
         [company_id, customer_ids],
+      );
+      await recordAccountHealthReviews(
+        company_id,
+        result.rows.map((r) => r.id as string),
       );
       return { content: [{ type: "text", text: JSON.stringify(result.rows, null, 2) }] };
     },
@@ -544,6 +632,19 @@ function buildServer(): McpServer {
       },
     },
     async ({ company_id, title, description, priority, team_key, amount_at_risk_usd, customer_ids }) => {
+      if (!ledgerDb) {
+        return { isError: true, content: [{ type: "text", text: "RECOVERY_LEDGER_DB_URL is not configured — cannot validate the tenant." }] };
+      }
+      // Validate BEFORE creating anything — a bad company_id must never reach
+      // Linear (or even the simulated dry-run path) and then only surface as
+      // a foreign-key error on the async ledger write, which would leave a
+      // real ticket permanently unaudited (the ledger insert can't succeed
+      // against a company_id that doesn't exist, no matter how many times
+      // the background retry queue tries).
+      const companyExists = await ledgerDb.query("select 1 from public.companies where id = $1", [company_id]);
+      if (companyExists.rowCount === 0) {
+        return { isError: true, content: [{ type: "text", text: `No company "${company_id}" — refusing to file a ticket for an unknown tenant.` }] };
+      }
       if (DRY_RUN || !LINEAR_API_KEY) {
         const simulatedIssue = { id: `SIM-${randomUUID().slice(0, 8)}`, title, priority, team_key: team_key ?? LINEAR_TEAM_KEY };
         await recordLedgerEntry({

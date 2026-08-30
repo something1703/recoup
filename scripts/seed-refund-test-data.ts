@@ -33,6 +33,9 @@ const FIXTURES = [
   { name: "Lantern Legal", plan: "starter", mrr: 59, tier: "low", refunds: [59] },
 ] as const;
 
+// Seeds Stripe first, then prints the matching customers SQL — the fixture's
+// real Stripe customer IDs don't exist until Stripe assigns them, so the two
+// can't be authored together ahead of time.
 async function main() {
   const rows: string[] = [];
 
@@ -57,12 +60,12 @@ async function main() {
     }
 
     rows.push(
-      `  ('${customer.id}', '${f.name.replace(/'/g, "''")}', '${f.plan}', ${String(f.mrr)}, '${f.tier}', '${new Date().toISOString().slice(0, 10)}')`,
+      `  ('${customer.id}', '${f.name.replace(/'/g, "''")}', '${f.plan}', ${String(f.mrr)}, '${f.tier}', '${new Date().toISOString().slice(0, 10)}', 'comp_ferro_commerce')`,
     );
   }
 
   console.log("\n--- paste into the customers table (Supabase SQL editor) so get_customer_ltv can tier these ---\n");
-  console.log("insert into public.customers (id, name, plan, mrr_usd, ltv_tier, signup_date) values");
+  console.log("insert into public.customers (id, name, plan, mrr_usd, ltv_tier, signup_date, company_id) values");
   console.log(rows.join(",\n") + "\non conflict (id) do nothing;");
 }
 

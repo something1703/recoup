@@ -111,6 +111,25 @@ create table if not exists public.customer_churn_ground_truth (
 );
 
 -- ---------------------------------------------------------------------------
+-- 1d. account_health_reviews — every customer_id get_account_usage has ever
+--     been asked about. Precision/recall are meaningless without this: the
+--     agent only ever reviews a bounded shortlist (get_account_usage is
+--     capped at 50/call), so scoring "everyone in the ground truth the agent
+--     never looked at" as a predicted-negative silently manufactures a huge,
+--     wrong recall denominator. score-account-health-eval.ts scores only
+--     within this reviewed set — a flagged customer outside it, or a
+--     ground-truth churner never reviewed, is excluded from scoring, not
+--     miscounted.
+-- ---------------------------------------------------------------------------
+create table if not exists public.account_health_reviews (
+  customer_id text primary key references public.customers(id),
+  company_id text not null references public.companies(id),
+  first_reviewed_at timestamptz not null default now(),
+  last_reviewed_at timestamptz not null default now(),
+  review_count int not null default 1
+);
+
+-- ---------------------------------------------------------------------------
 -- 2. dunning_policy — one row PER TENANT, not a global singleton. A tenant's
 --    thresholds must be grounded in that tenant's own revenue distribution:
 --    comp_arcline_software's real SaaS MRR runs up to $3,100/mo, so a $500
@@ -213,6 +232,11 @@ create role recoup_eval_scorer login password '<SET-A-THIRD-REAL-RANDOM-PASSWORD
 grant usage on schema public to recoup_eval_scorer;
 grant select on public.customer_churn_ground_truth to recoup_eval_scorer;
 grant select on public.customers to recoup_eval_scorer;
+-- Needed to find which customer_ids the agent actually flagged (via
+-- open_recovery_ticket) and which it reviewed and cleared (via
+-- account_health_reviews, added below) — scoring requires both.
+grant select on public.recovery_ledger to recoup_eval_scorer;
+grant select on public.account_health_reviews to recoup_eval_scorer;
 
 -- ---------------------------------------------------------------------------
 -- Hardening: Supabase grants its PostgREST roles (anon, authenticated) full

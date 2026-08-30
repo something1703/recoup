@@ -46,6 +46,19 @@ update public.customers set company_id = 'comp_arcline_software'
 update public.customers set company_id = 'comp_ferro_commerce'
   where company_id is null and id in ('cus_VADMoGziwOA758', 'cus_VADMs4pyo5HsfO', 'cus_VADMZ09cI8WWKv');
 
+-- Fail loudly instead of letting SET NOT NULL below throw a bare constraint
+-- error: the backfill above only covers the 11 known fixture IDs, so any
+-- OTHER pre-existing customer row (a manual insert, a regenerated fixture
+-- with new Stripe IDs) would otherwise silently block this migration with no
+-- indication of which row or what to do about it.
+do $$
+begin
+  if exists (select 1 from public.customers where company_id is null) then
+    raise exception 'customers.company_id is null for % row(s) not covered by this migration''s backfill — assign them a company_id manually before rerunning',
+      (select count(*) from public.customers where company_id is null);
+  end if;
+end $$;
+
 -- Enforced only after backfill so this migration is safe to run against a
 -- database that already has the pre-tenancy fixture rows in it.
 alter table public.customers alter column company_id set not null;
@@ -70,6 +83,22 @@ alter table public.customers add column if not exists total_charges_usd numeric;
 --    invented: high starts at Meridian's real p90, medium at roughly its
 --    real median.
 -- ---------------------------------------------------------------------------
+-- This DROP is only safe to run ONCE, against the pre-multi-tenant singleton
+-- shape (primary key `id boolean`) — Postgres does not carry a table's rows
+-- forward across DROP+CREATE, so re-running this against an already-migrated
+-- database (company_id already the primary key) would silently destroy any
+-- tenant-specific tuning made since. Refuse instead of guessing.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'dunning_policy' and column_name = 'company_id'
+  ) then
+    raise exception 'dunning_policy already has a company_id column — this migration has already run. ' ||
+      'Re-running would DROP and destroy any tenant policy tuning made since. Edit rows directly instead.';
+  end if;
+end $$;
+
 drop table if exists public.dunning_policy;
 create table public.dunning_policy (
   company_id text primary key references public.companies(id),

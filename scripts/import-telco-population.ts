@@ -78,6 +78,8 @@ function signupDateFromTenure(tenureMonths: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Hand-rolled split on "," rather than a CSV library: the real dataset has no
+// quoted/escaped commas in any field, verified against the actual file.
 function parseCsv(text: string): Row[] {
   const lines = text.trim().split("\n");
   const header = lines[0]!.split(",");
@@ -123,6 +125,8 @@ function parseCsv(text: string): Row[] {
   });
 }
 
+// Chunked (500/batch) rather than one giant statement: Postgres has a real
+// param-count ceiling, and batching also gives visible progress on 7k+ rows.
 async function main() {
   const rows = parseCsv(readFileSync(CSV_PATH, "utf8"));
   console.log(`Parsed ${String(rows.length)} real subscriber rows from ${CSV_PATH}`);
@@ -138,12 +142,12 @@ async function main() {
 
     const custParams: unknown[] = [];
     const custPlaceholders = chunk.map((r, j) => {
-      const b = j * 10;
-      custParams.push(r.id, r.name, r.plan, r.mrrUsd, r.ltvTier, r.signupDate, COMPANY_ID, r.tenureMonths, r.contractType, r.paymentMethod);
-      return `($${String(b + 1)}, $${String(b + 2)}, $${String(b + 3)}, $${String(b + 4)}, $${String(b + 5)}, $${String(b + 6)}, $${String(b + 7)}, $${String(b + 8)}, $${String(b + 9)}, $${String(b + 10)})`;
+      const b = j * 11;
+      custParams.push(r.id, r.name, r.plan, r.mrrUsd, r.ltvTier, r.signupDate, COMPANY_ID, r.tenureMonths, r.contractType, r.paymentMethod, r.totalChargesUsd);
+      return `($${String(b + 1)}, $${String(b + 2)}, $${String(b + 3)}, $${String(b + 4)}, $${String(b + 5)}, $${String(b + 6)}, $${String(b + 7)}, $${String(b + 8)}, $${String(b + 9)}, $${String(b + 10)}, $${String(b + 11)})`;
     });
     await pool.query(
-      `insert into public.customers (id, name, plan, mrr_usd, ltv_tier, signup_date, company_id, tenure_months, contract_type, payment_method)
+      `insert into public.customers (id, name, plan, mrr_usd, ltv_tier, signup_date, company_id, tenure_months, contract_type, payment_method, total_charges_usd)
        values ${custPlaceholders.join(",\n")}
        on conflict (id) do nothing`,
       custParams,

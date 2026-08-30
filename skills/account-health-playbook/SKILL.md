@@ -32,28 +32,42 @@ Meridian account or vice versa.
 
 ## 1. Triage — pull the working set
 
-Call `get_account_usage` for the specific batch of accounts under review (max 50 per call —
-if reviewing more, batch it; never try to reason about a whole tenant's population at once
-in your own context — that is both slow and unnecessary, the same discipline as the
-dunning-playbook's batch-shaped tools). Prefer a targeted set (accounts up for renewal this
-period, or ones a human flagged) over an arbitrary sample.
+If you already have specific customer IDs (a human flagged them, or they came out of a
+dunning/refund investigation), skip straight to `get_account_usage`. Otherwise, discover a
+shortlist with `list_customers` first — **do not go looking for customer IDs in the Stripe
+tools.** Not every tenant's customers exist in Stripe: comp_meridian_telecom's real
+subscriber population has no Stripe presence at all (it is DB-only, imported from a real
+dataset), so a Stripe search for its accounts will come back empty or irrelevant. `list_customers`
+is the tenant-agnostic discovery path — narrow it with `ltv_tier` or `contract_type` to get a
+plausible starting shortlist (e.g. month-to-month contracts for comp_meridian_telecom), then
+call `get_account_usage` on that shortlist (max 50 per call — if reviewing more, batch it;
+never try to reason about a whole tenant's population at once in your own context — that is
+both slow and unnecessary, the same discipline as the dunning-playbook's batch-shaped tools).
 
 ## 2. Classify
 
-**For comp_arcline_software (bug vs. organic):** delegate to parallel sub-agents, merge
-findings:
+**For comp_arcline_software (bug vs. organic):** `get_account_usage` gives you one current
+30-day snapshot, not a history — there is no prior-period number to diff against, so don't
+reason as if you can see a trend line. What you actually have: a utilization ratio
+(`api_calls_30d` against `api_quota_30d`, `seats_used` against `seats_included`) and
+`last_active_date`, which IS a real point-in-time fact you can compare against other
+timestamps. Delegate to parallel sub-agents, merge findings:
 
-1. **Usage-drop sizer** — for each account, compare `api_calls_30d` against
-   `api_quota_30d` and `seats_used` against `seats_included`; flag accounts whose usage has
-   fallen well below what their plan provisions for, and note `last_active_date` recency.
-2. **Sentry error correlation** — search for an error spike affecting the same window as a
-   flagged account's usage drop.
+1. **Utilization sizer** — for each account, compute the utilization ratio and flag accounts
+   using well below what their plan provisions for, noting how many days since
+   `last_active_date`.
+2. **Sentry error correlation** — search for an error spike whose window is close to a
+   flagged account's `last_active_date` (recent inactivity lining up with a recent error is
+   the real signal; a low ratio with a `last_active_date` from months ago is just an account
+   that has always been quiet, not a decline).
 3. **GitHub deploy correlation** — check for a release touching the area of the product that
-   account depends on, in the same window.
+   account depends on, close to the same `last_active_date` window.
 
-Read together: a usage drop that lines up with an error spike or a relevant deploy is OUR
-bug driving disengagement — urgent, ours to fix. A drop with no such correlation is the
-customer's own trajectory — worth flagging for customer success, not engineering.
+Read together: low utilization whose `last_active_date` lines up with an error spike or a
+relevant deploy is OUR bug driving disengagement — urgent, ours to fix. Low utilization with
+no such correlation is the customer's own trajectory — worth flagging for customer success,
+not engineering. If you can't establish a timing correlation either way, say so rather than
+guessing — you have a snapshot, not a trend, and the classification should reflect that.
 
 **For comp_meridian_telecom (multi-signal weighing):** there is no Sentry/GitHub signal to
 correlate against — this tenant's risk classification rests entirely on the customer's own
