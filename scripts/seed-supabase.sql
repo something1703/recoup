@@ -223,6 +223,10 @@ grant select on public.customers to recoup_actions_service;
 grant select on public.companies to recoup_actions_service;
 grant select on public.dunning_policy to recoup_actions_service;
 grant select, insert on public.recovery_ledger to recoup_actions_service;
+-- get_account_usage best-effort logs every review through this role (see
+-- recordAccountHealthReviews in mcp-server) so the eval scorer knows what
+-- was actually reviewed; update is needed for the on-conflict review_count bump.
+grant select, insert, update on public.account_health_reviews to recoup_actions_service;
 
 -- Consumer 3: a human/script only — scripts/score-account-health-eval.ts.
 -- Never wired into mcp-server or any TrueForge connector. This is what makes

@@ -185,14 +185,7 @@ async function getAlreadyRecoveredChargeIds(): Promise<Set<string>> {
   }
 }
 
-// Records that get_account_usage was asked about these customers — this is
-// what lets scripts/score-account-health-eval.ts score precision/recall over
-// the accounts the agent actually reviewed, instead of silently treating
-// every one of the ~7,000 real Meridian customers it never looked at as a
-// "predicted healthy" negative. Best-effort and non-blocking: losing a review
-// log entry only slightly undercounts the eval's reviewed set, unlike a
-// recovery_ledger entry, so this doesn't need the durable retry-queue
-// machinery recordLedgerEntry uses for real financial actions.
+// Logs who get_account_usage actually looked at, so the eval scorer can score against a reviewed set instead of the whole real population.
 async function recordAccountHealthReviews(companyId: string, customerIds: string[]): Promise<void> {
   if (!ledgerDb || customerIds.length === 0) return;
   try {
@@ -374,6 +367,7 @@ function buildServer(): McpServer {
         openWorldHint: false,
       },
     },
+    // Bounded, filtered discovery — the agent's only way to find customer_ids for a Stripe-absent tenant like comp_meridian_telecom.
     async ({ company_id, ltv_tier, contract_type, limit }) => {
       if (!customersDb) {
         return { isError: true, content: [{ type: "text", text: "CUSTOMERS_DB_URL is not configured — cannot query customer data." }] };
@@ -419,9 +413,16 @@ function buildServer(): McpServer {
       },
       annotations: {
         title: "Get account usage / health signals",
-        readOnlyHint: true,
+        // Not pure read-only: every call best-effort logs itself into
+        // account_health_reviews (see recordAccountHealthReviews) so the
+        // eval scorer knows what was actually reviewed. That's an audit
+        // side effect, not a consequential action — same category as
+        // recovery_ledger writes happening unconditionally regardless of
+        // DRY_RUN — so it stays out of require_approval_for_tools, but the
+        // annotation says so honestly rather than claiming a pure read.
+        readOnlyHint: false,
         destructiveHint: false,
-        idempotentHint: true,
+        idempotentHint: false,
         openWorldHint: false,
       },
     },

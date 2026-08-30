@@ -60,11 +60,17 @@ async function main() {
   // ticket stores JSON null there) — jsonb_array_elements_text throws on a
   // scalar, so only unnest rows where the value is actually a JSON array.
   const flaggedResult = await pool.query<{ customer_id: string }>(
+    // No dry_run filter, deliberately unlike /stats: DRY_RUN only controls
+    // whether a REAL Linear ticket gets filed — it never changes the agent's
+    // own classification, so a dry-run ticket's customer_ids are exactly as
+    // real a prediction as a live one. Excluding them here (as /stats
+    // correctly does for dollar totals, to avoid inflating a real-money
+    // claim) would leave this scorer with nothing to score under the
+    // project's own DRY_RUN=true default and silently report 0% on every run.
     `select distinct jsonb_array_elements_text(outcome -> 'customer_ids') as customer_id
      from public.recovery_ledger
      where company_id = $1
        and action_type = 'open_recovery_ticket'
-       and outcome ->> 'dry_run' = 'false'
        and jsonb_typeof(outcome -> 'customer_ids') = 'array'`,
     [COMPANY_ID],
   );
