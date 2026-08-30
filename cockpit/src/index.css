@@ -56,6 +56,19 @@ body {
   letter-spacing: 0.02em;
   border-bottom: 1px solid #16130f22;
 }
+
+/* Notary blue, not gold — gold is reserved for the approval moment above.
+   A sub-agent thread reads as "a witness giving evidence," not a decision.
+   A thick side-accent bar was the first pass here — the exact generic
+   "AI-slop" side-tab pattern, caught by the design hook. This is a thin
+   all-around border + a faint tint instead, matching how Exhibit.tsx
+   already marks a card as distinct evidence (border border-ink/25) rather
+   than inventing a new accent-bar language just for this one card. */
+.recoup-subagent-card {
+  border: 1px solid #1e3a5f4d !important;
+  background: rgba(30, 58, 95, 0.035) !important;
+  border-radius: 4px !important;
+}
 .recoup-incident-banner--running,
 .recoup-incident-banner--done {
   background: #eef1e8;
@@ -65,6 +78,36 @@ body {
 .recoup-incident-banner--error {
   background: #fdecea;
   color: #9b2c2c;
+}
+.recoup-incident-banner__dismiss {
+  background: none;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 1px 8px;
+  margin-left: 4px;
+  cursor: pointer;
+}
+
+/* Assessment B (2026-08-30): an unstyled <button> with no rest-state bg-*
+   utility falls back to the BROWSER's native UA button fill, which itself
+   tracks the real OS/browser color-scheme independent of this app's own
+   tokens or in-app dark-mode toggle — confirmed live at 1.37:1 contrast
+   under real OS dark mode on the "Chat History" control specifically, while
+   every token-driven button stayed correct. Standard reset: every button's
+   background must come from our own tokens/CSS, never a UA default. */
+button {
+  background-color: transparent;
+}
+
+/* Assessment B: composer placeholder measured 4.41:1 (fails 4.5:1 AA) — the
+   SDK's own utility applies text-secondary at a fixed 80% opacity we can't
+   reach from a token. Full-opacity override, scoped to placeholders only. */
+::placeholder {
+  opacity: 1 !important;
+  color: #4a453a !important;
 }
 
 /* Phase 9.7 / stat bar: reads as "Live Ledger", not an unexplained number. */

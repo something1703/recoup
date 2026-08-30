@@ -35,16 +35,19 @@ const DESKS = [
 ] as const;
 
 export function DeskPrompts() {
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ id: string; kind: "copied" | "failed" } | null>(null);
 
   async function copy(id: string, text: string) {
     try {
       await navigator.clipboard.writeText(text);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1500);
+      setStatus({ id, kind: "copied" });
     } catch {
-      // Clipboard permission denied or unavailable — the prompt text is still visible to select/copy manually.
+      // Clipboard permission denied or unavailable — was previously a silent
+      // no-op with no visible signal at all; the prompt text is still
+      // selectable manually (title attribute), but say so instead of nothing.
+      setStatus({ id, kind: "failed" });
     }
+    setTimeout(() => setStatus((current) => (current?.id === id ? null : current)), 1800);
   }
 
   return (
@@ -61,7 +64,9 @@ export function DeskPrompts() {
           >
             <span className="recoup-desk-prompts__chip-label">{desk.label}</span>
             <span className="recoup-desk-prompts__chip-tenant">{desk.tenantLabel}</span>
-            <span className="recoup-desk-prompts__chip-action">{copiedId === desk.id ? "Copied ✓" : "Copy prompt"}</span>
+            <span className="recoup-desk-prompts__chip-action">
+              {status?.id === desk.id ? (status.kind === "copied" ? "Copied ✓" : "Couldn't copy — select the text above") : "Copy prompt"}
+            </span>
           </button>
         ))}
       </div>
