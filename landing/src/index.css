@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: #f4f2ec;
+  color: #16130f;
+  font-family: "Courier Prime", monospace;
+}
+
+::selection {
+  background: #c1272d;
+  color: #f4f2ec;
+}
+
+/* A rubber-stamp mark: rotated, inked, slightly imperfect — never a flat badge. */
+.stamp {
+  font-family: "Special Elite", cursive;
+  display: inline-block;
+  border: 3px solid currentColor;
+  border-radius: 2px;
+  padding: 0.15em 0.45em;
+  transform: rotate(-3deg);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  position: relative;
+}
+
+.stamp::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.4;
+  transform: rotate(1deg);
+  pointer-events: none;
+}
+
+/* A single strict document grid every section obeys — the raise donated from
+   the ASCII-render challenger: no component breaks this margin, ever. */
+.case-file {
+  max-width: 72rem;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .case-file {
+    padding-inline: 3rem;
+  }
+}
+
+/* Redline annotation — a claim underlined the way an editor marks a
+   correction, used to point at the one number/fact that matters in a line. */
+.redline {
+  text-decoration: underline;
+  text-decoration-color: #c1272d;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+.docket-rule {
+  border-top: 1px dashed #16130f66;
+}
+
+@keyframes stamp-in {
+  from {
+    opacity: 0;
+    transform: rotate(-3deg) scale(1.4);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(-3deg) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .stamp-animate {
+    animation: stamp-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}

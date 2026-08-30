@@ -11,6 +11,11 @@ order. Do not skip the classification stage to go straight to retrying — a ret
 the wrong root cause (e.g. retrying a charge that failed because of OUR webhook bug) wastes
 a customer's card decline count and can look like harassment.
 
+Recoup runs this playbook for multiple tenant companies (see `get_dunning_thresholds`'
+description) — every tool call below takes a `company_id`. Confirm which tenant you're
+investigating before calling anything, and never reuse one tenant's thresholds or figures
+for another; each has its own real revenue distribution and its own `dunning_policy` row.
+
 ## 1. Triage — pull the raw picture
 
 - Pull recent failed charges/invoices from Stripe (date range, decline codes, amounts,

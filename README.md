@@ -41,8 +41,32 @@ policy into a gated, investigative agent.
   refresh mid-investigation. None of that is hand-rolled — it's the harness doing real
   work, visibly, in the demo.
 - **Qodo** reviews every pull request in this repo before it merges. See
-  `docs/CODE_QUALITY_BAR.md` for the exact workflow, and the "Qodo Code Review Evidence"
-  section below once real PRs exist.
+  `docs/CODE_QUALITY_BAR.md` for the exact workflow, and "Qodo Code Review Evidence"
+  below for a real example.
+
+## Bring your own tenant
+
+Arcline, Ferro, and Meridian are demo tenants, not the whole story — the point is that all
+three (a B2B SaaS, a subscription retailer, and a consumer telecom, three genuinely
+different revenue shapes) run through the exact same `companies` row, the same MCP tools,
+and the same three skills, with no per-tenant code branching. Adding a real fourth tenant
+is the same three steps as adding Meridian was:
+
+1. **Insert a company + policy.** A row in `public.companies` (`scripts/seed-supabase.sql`
+   shows the shape) and a matching `public.dunning_policy` row — thresholds, LTV tiers,
+   never-retry decline codes, all data, not code.
+2. **Connect its real systems.** Point the Stripe/Sentry/GitHub/Linear catalog connectors
+   at that tenant's own accounts in TrueForge's Settings → Connectors — these are live API
+   integrations, not fixtures, so a real (or real test-mode) account works unmodified.
+3. **Import its customer population**, if it's a usage/churn-shaped business rather than a
+   pure Stripe-failures one: `scripts/import-telco-population.ts --company-id
+   comp_your_company --csv path/to/your-customers.csv` (same column shape as
+   `scripts/data/telco-customer-churn.csv`; see the script's own header comment to remap a
+   different shape, and override `ltvTier()`'s cutoffs if your tenant's thresholds differ
+   from the ones in its `dunning_policy` row).
+
+Nothing about the agent, the skills, or the approval gates changes — `company_id` is a
+parameter on every tool call, not a fixed identity baked into the code.
 
 ## Repo layout
 
@@ -85,18 +109,29 @@ what access the human needs to provide, and exit criteria. Work them in order �
 
 ## Qodo Code Review Evidence
 
-*(Fill in once a real PR exists — see `docs/CODE_QUALITY_BAR.md` for the required format.)*
-
-```markdown
-- PR: <link to a representative merged PR with real hackathon code>
-- What Qodo surfaced: <1–2 sentences — a real finding, and what you did about it>
-- Review trail: initial review → decision → follow-up review, visible on the PR thread.
-```
+- PR: [#6 — Multi-tenant revenue platform: real Telco Churn data + account-health desk](https://github.com/something1703/recoup/pull/6)
+- What Qodo surfaced: across three review rounds, 10 findings — all High severity, all
+  fixed, not dismissed. The two worth calling out: `scripts/migrate-multi-tenant.sql`'s
+  rerun guard could roll back its own non-destructive setup before reaching the guarded
+  section, silently breaking idempotency on an already-migrated database; and
+  `scripts/score-account-health-eval.ts` filtered out every `dry_run=true` ledger row,
+  which — since dry-run is this project's default — meant a normal evaluation run scored
+  every real classification as a false negative. Both fixed and re-verified.
+- Review trail: three rounds (initial review → fixes → follow-up review, three times) all
+  visible on the PR thread, ending with every finding marked resolved and a clean,
+  conflict-free merge state.
 
 ## Status
 
-Scaffolded and verified: `mcp-server/` (builds, type-checks, smoke-tested against a live
-MCP handshake), `cockpit/` (builds, type-checks against the real published
-`@truefoundry/trueforge-ui`), `skills/dunning-playbook/SKILL.md`, `agent-spec.json`, and
-the demo-data seed scripts. Everything else is planned in `docs/phases/` and not yet
-built — that's the work ahead.
+Live, not just scaffolded. `mcp-server/` runs as `recoup-actions` on Cloud Run — its own
+bearer-token auth confirmed rejecting unauthenticated/invalid requests, tenant-scoped
+tools backed by real Postgres (Supabase), a public aggregate-only `/stats` endpoint.
+`cockpit/` is deployed and drives a real TrueForge session end to end: verified live by
+scripting an actual investigation through the browser — the agent reads the
+`dunning-playbook` skill, calls real Stripe test-mode tools, and stops on a genuine
+tool-approval gate before proceeding, exactly as `agent-spec.json` configures it. Three
+skills exist (`dunning-playbook`, `refund-abuse-playbook`, `account-health-playbook`)
+against a real, held-out IBM Telco Customer Churn population, scored by
+`scripts/score-account-health-eval.ts`. `landing/` is deployed with the full case-file
+design system. See `docs/DEMO_SCRIPT.md` for the walkthrough and `docs/PHASE_MAP.md` for
+what's still open.

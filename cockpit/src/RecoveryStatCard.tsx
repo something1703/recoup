@@ -81,9 +81,12 @@ export function RecoveryStatCard() {
 
   return (
     <div className="recoup-stat-card" data-testid="recoup-recovery-stat">
+      <span className="recoup-stat-card__tag">LIVE LEDGER</span>
       <span className="recoup-stat-card__value">{currencyFormatter.format(animatedTotal)}</span>
       <span className="recoup-stat-card__label">
-        recovered · {stats.tickets_opened} ticket{stats.tickets_opened === 1 ? "" : "s"} opened
+        recovered · {stats.tickets_opened} ticket{stats.tickets_opened === 1 ? "" : "s"} opened ·{" "}
+        {stats.actions_count} recorded action{stats.actions_count === 1 ? "" : "s"}
+        {stats.total_recovered_usd === 0 && " — $0.00 is correct: DRY_RUN is on by default"}
       </span>
     </div>
   );

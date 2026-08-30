@@ -11,7 +11,6 @@ hand-roll an equivalent. Verify a server is still live before depending on it in
 | Server | Used for | Auth | Phase |
 |---|---|---|---|
 | **Stripe** | Failed-charge data, the retry target | OAuth (DCR), test mode | 4 |
-| **Supabase** | Customer/LTV data, restricted to `@read-only` | OAuth (DCR) | 3, 4 |
 | **Sentry** | Error-correlation evidence | OAuth (DCR) | 4 |
 | **GitHub** | Deploy-correlation evidence (read-only toolset) | Header (PAT) | 4 |
 | **Linear** | The engineering-ticket escalation path | OAuth (DCR) | 4 |
@@ -19,7 +18,18 @@ hand-roll an equivalent. Verify a server is still live before depending on it in
 These need no custom integration work — they're config, not code. Connect each, then do
 one real tool call through TrueForge's chat UI to confirm it actually returns data before
 moving on; a connector that's "added" but never verified is a demo-day surprise waiting to
-happen.
+happen. (This is exactly how we caught the Supabase removal below — worth repeating for
+every connector still on this list before the final demo, not just once at setup.)
+
+**Removed: Supabase.** It was on this list through Phase 4, but its only data-query tool,
+`execute_sql`, is vendor-annotated destructive — the agent's `@read-only` restriction
+correctly filters it out, leaving zero usable tools behind an unauthenticated, `preload:
+true` connector. Confirmed live: a real investigation run stalled on "MCP Authentication
+Required — supabase" before ever calling a tool that connector could have served anyway.
+`get_customer_ltv` on `recoup-actions` (below) was already the real read path — see gotcha
+#7 in `docs/ARCHITECTURE.md`. Removed from `agent-spec.json`; also remove it from the live
+`recoup` agent's MCP servers in TrueForge's Settings → Agents if it's still listed there,
+since the manifest file doesn't push itself to an already-created agent.
 
 ## Custom, purpose-built — not in any catalog
 

@@ -2,6 +2,7 @@ import { TrueForgeUI } from "@truefoundry/trueforge-ui";
 import { IncidentBanner } from "./IncidentBanner";
 import { RecoupToolCallCard } from "./RecoupToolCallCard";
 import { RecoveryStatCard } from "./RecoveryStatCard";
+import { DeskPrompts } from "./DeskPrompts";
 
 // Local-mode default per docs/quickstart.mdx. Override with VITE_TRUEFORGE_BASE_URL
 // when pointed at a hosted-mode deployment (http://localhost:8791) or a real domain.
@@ -16,6 +17,7 @@ export default function App() {
     <div className="h-full min-h-0 flex flex-col">
       <IncidentBanner />
       <RecoveryStatCard />
+      <DeskPrompts />
       <TrueForgeUI
         server={{ type: "trueforge", baseUrl: TRUEFORGE_BASE_URL }}
         layout="sidebar"
@@ -24,14 +26,10 @@ export default function App() {
         agentConfig={{ mode: "SingleAgent", name: "recoup" }}
         theme={{
           preset: "trueforge",
-          // The published @truefoundry/trueforge-ui@0.2.4 BrandConfig is just
-          // { name, logo? } — no `mode`/`icon`/`href` yet (the docs in the repo
-          // describe a newer shape; verified against the installed d.ts before
-          // shipping this). Add `logo: "/your-logo.svg"` once you have one.
-          brand: { name: "Recoup" },
+          brand: { name: "Recoup", logo: { src: "/recoup-logo.svg" } },
           tokens: {
-            primaryButtonBg: "#0f6b3f",
-            primaryButtonHover: "#0c5733",
+            primaryButtonBg: "#c1272d",
+            primaryButtonHover: "#a02024",
             successBg: "#e6f4ea",
             successText: "#0f6b3f",
           },
