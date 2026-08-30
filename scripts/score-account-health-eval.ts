@@ -20,13 +20,21 @@
  * recall denominator — precision/recall below are computed only over
  * customers that were actually reviewed at least once.
  *
+ * Time-scoped to one evaluation window, not all history: without a boundary,
+ * two different investigation runs (possibly different prompts, different
+ * code versions) blend into one confusion matrix — an account flagged by any
+ * run ever stays "flagged" forever, and old reviews never leave the reviewed
+ * set. Defaults to the last 24 hours (one sitting's worth of testing);
+ * override with --since or widen deliberately with --all-time.
+ *
  * Usage (uses recoup_eval_scorer — never recoup_agent_readonly/actions_service):
- *   SUPABASE_DB_HOST=... SUPABASE_EVAL_SCORER_PASSWORD=... npx tsx scripts/score-account-health-eval.ts
+ *   SUPABASE_DB_HOST=... SUPABASE_EVAL_SCORER_PASSWORD=... npx tsx scripts/score-account-health-eval.ts [--since <ISO-8601>] [--all-time]
  */
 
 import { Pool } from "pg";
 
 const COMPANY_ID = "comp_meridian_telecom";
+const DEFAULT_WINDOW_HOURS = 24;
 
 const host = process.env.SUPABASE_DB_HOST;
 const password = process.env.SUPABASE_EVAL_SCORER_PASSWORD;
@@ -34,23 +42,39 @@ if (!host || !password) {
   throw new Error("Set SUPABASE_DB_HOST and SUPABASE_EVAL_SCORER_PASSWORD (the recoup_eval_scorer role) before running this.");
 }
 
+function resolveSince(argv: string[]): Date | null {
+  if (argv.includes("--all-time")) return null;
+  const sinceIndex = argv.indexOf("--since");
+  if (sinceIndex !== -1 && argv[sinceIndex + 1]) {
+    const parsed = new Date(argv[sinceIndex + 1]!);
+    if (Number.isNaN(parsed.getTime())) throw new Error(`--since value is not a valid date: ${argv[sinceIndex + 1]}`);
+    return parsed;
+  }
+  return new Date(Date.now() - DEFAULT_WINDOW_HOURS * 60 * 60 * 1000);
+}
+
 // Reads three independent sources and joins them in plain JS rather than one
 // SQL query — precision/recall depend on getting the "reviewed but not
 // flagged = predicted healthy" logic right, which is easier to get right (and
 // verify) as explicit set operations than as a single nested SQL expression.
 async function main() {
+  const since = resolveSince(process.argv.slice(2));
   const pool = new Pool({ host, port: 5432, user: "recoup_eval_scorer", database: "postgres", password, ssl: { rejectUnauthorized: false } });
 
+  console.log(
+    since ? `Scoring window: reviews/tickets since ${since.toISOString()} (pass --all-time to score every run ever, or --since <ISO-8601> for a specific cutoff).` : "Scoring window: --all-time (every run ever, may blend multiple investigation runs together).",
+  );
+
   const reviewedResult = await pool.query<{ customer_id: string }>(
-    `select customer_id from public.account_health_reviews where company_id = $1`,
-    [COMPANY_ID],
+    `select customer_id from public.account_health_reviews where company_id = $1 and ($2::timestamptz is null or last_reviewed_at >= $2)`,
+    [COMPANY_ID, since],
   );
   const reviewed = new Set(reviewedResult.rows.map((r) => r.customer_id));
 
   if (reviewed.size === 0) {
     console.log(
-      "No account_health_reviews found for comp_meridian_telecom yet — the agent hasn't run get_account_usage " +
-        "against this tenant, so there's nothing to score.",
+      "No account_health_reviews found for comp_meridian_telecom in this window — the agent hasn't run get_account_usage " +
+        "against this tenant recently, so there's nothing to score. Try --all-time or an earlier --since.",
     );
     await pool.end();
     return;
@@ -71,8 +95,9 @@ async function main() {
      from public.recovery_ledger
      where company_id = $1
        and action_type = 'open_recovery_ticket'
-       and jsonb_typeof(outcome -> 'customer_ids') = 'array'`,
-    [COMPANY_ID],
+       and jsonb_typeof(outcome -> 'customer_ids') = 'array'
+       and ($2::timestamptz is null or created_at >= $2)`,
+    [COMPANY_ID, since],
   );
   const flaggedRaw = new Set(flaggedResult.rows.map((r) => r.customer_id));
 

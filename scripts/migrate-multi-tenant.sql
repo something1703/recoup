@@ -10,14 +10,18 @@
 -- statement is IF NOT EXISTS / ON CONFLICT DO NOTHING / guarded, so re-running
 -- after a partial failure is safe.
 --
--- Ordering note: everything through section 6 is non-destructive (CREATE IF
--- NOT EXISTS / grants) and deliberately placed BEFORE section 7's guarded
--- dunning_policy rebuild. That guard RAISEs on an already-migrated database,
--- which aborts this whole script's transaction — anything placed after it
--- would silently never run on a re-application. A real instance of that bug
--- (account_health_reviews originally lived after the guard) was caught by
--- Qodo review rather than by testing a re-run, which is exactly the case
--- this ordering now prevents from recurring.
+-- Transaction note: sections 1-6 and section 7 run in SEPARATE explicit
+-- transactions (begin/commit), not one big implicit one. Placing section 7's
+-- guard after the rest ISN'T enough on its own — a multi-statement string
+-- sent via node-pg's simple query protocol runs as one implicit transaction
+-- by default, so a RAISE EXCEPTION anywhere would roll back EVERYTHING
+-- before it too, including sections that had already "safely" run. Verified
+-- empirically (not assumed) against a scratch table before trusting this:
+-- an explicit commit before the failing block really does survive it.
+-- Sections 1-6 are non-destructive (CREATE IF NOT EXISTS / grants) and can
+-- commit independently of whether section 7 ends up applying.
+
+begin;
 
 -- ---------------------------------------------------------------------------
 -- 1. companies — the tenants Recoup runs revenue recovery for.
@@ -153,6 +157,8 @@ grant select on public.customers to recoup_eval_scorer;
 grant select on public.recovery_ledger to recoup_eval_scorer;
 grant select on public.account_health_reviews to recoup_eval_scorer;
 
+commit;
+
 -- ---------------------------------------------------------------------------
 -- 7. dunning_policy — rebuilt per-tenant. The old singleton's thresholds
 --    (high >= $500 MRR) were derived from Arcline's SaaS pricing and are
@@ -165,10 +171,13 @@ grant select on public.account_health_reviews to recoup_eval_scorer;
 --    invented: high starts at Meridian's real p90, medium at roughly its
 --    real median.
 --
---    Placed LAST: this section's guard RAISEs (aborting the whole script) on
---    an already-migrated database, so every other, non-destructive section
---    above it must not depend on this one having run.
+--    Placed LAST and in its OWN transaction (see the top-of-file note): this
+--    section's guard RAISEs on an already-migrated database, aborting only
+--    THIS transaction — sections 1-6 already committed above and are
+--    unaffected regardless of what happens here.
 -- ---------------------------------------------------------------------------
+begin;
+
 -- This DROP is only safe to run ONCE, against the pre-multi-tenant singleton
 -- shape (primary key `id boolean`) — Postgres does not carry a table's rows
 -- forward across DROP+CREATE, so re-running this against an already-migrated
@@ -180,8 +189,11 @@ begin
     select 1 from information_schema.columns
     where table_schema = 'public' and table_name = 'dunning_policy' and column_name = 'company_id'
   ) then
-    raise exception 'dunning_policy already has a company_id column — this migration has already run. ' ||
-      'Re-running would DROP and destroy any tenant policy tuning made since. Edit rows directly instead.';
+    -- RAISE wants a single literal format string, not a `||` expression —
+    -- that concatenation form is invalid PL/pgSQL syntax (verified live: it
+    -- throws its own "syntax error at or near ||" before ever reaching this
+    -- exception), which would have made this guard itself uncallable.
+    raise exception 'dunning_policy already has a company_id column — this migration has already run. Re-running would DROP and destroy any tenant policy tuning made since. Edit rows directly instead.';
   end if;
 end $$;
 
@@ -222,3 +234,5 @@ grant select on public.dunning_policy to recoup_agent_readonly;
 -- retry_eligible_charges' independent policy check would have failed at
 -- runtime with a permission error the first time it ran for real.
 grant select on public.dunning_policy to recoup_actions_service;
+
+commit;
