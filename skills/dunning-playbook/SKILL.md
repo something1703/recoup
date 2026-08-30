@@ -25,8 +25,11 @@ for another; each has its own real revenue distribution and its own `dunning_pol
 
 ## 2. Classify — card-level vs. platform-level
 
-Delegate this stage to four parallel sub-agents, one per evidence source, and merge their
-findings rather than working through each source serially in the root agent's own context:
+Delegate this stage by calling the built-in `create_sub_agent` tool — four parallel
+sub-agents, one per evidence source — and merge their findings rather than working
+through each source serially in the root agent's own context. (Name matters: the harness
+only fans out when `create_sub_agent` is actually called; deciding to "delegate" in prose
+while doing the work yourself is the failure mode this line exists to prevent.)
 
 1. **Stripe segment sizer** — group the failed charges by decline code and by whether they
    cluster on one plan, one payment-method type, or one country.
