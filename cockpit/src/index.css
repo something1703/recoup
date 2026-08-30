@@ -97,6 +97,12 @@ body {
   margin: 0 auto;
   padding: 3rem 1.5rem 2rem;
   text-align: center;
+  /* Forced explicitly: this slot renders inside the SDK's own (dark) theme
+     container, and #16130f ink text on that dark ground was reading as
+     near-invisible grey — this must never inherit the surrounding theme. */
+  background: #f4f2ec;
+  border-radius: 12px;
+  color: #16130f;
 }
 .recoup-welcome__mark {
   display: inline-flex;
