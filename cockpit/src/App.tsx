@@ -26,10 +26,7 @@ export default function App() {
         agentConfig={{ mode: "SingleAgent", name: "recoup" }}
         theme={{
           preset: "trueforge",
-          // 0.3.0-rc's BrandConfig requires mode + both icon (compact) and
-          // logo (expanded) — reusing the same wide mark for both since we
-          // only have one asset; not ideal in the compact slot, but valid.
-          brand: { mode: "logo", name: "Recoup", icon: "/recoup-logo.svg", logo: "/recoup-logo.svg" },
+          brand: { name: "Recoup", logo: { src: "/recoup-logo.svg" } },
           tokens: {
             primaryButtonBg: "#c1272d",
             primaryButtonHover: "#a02024",
