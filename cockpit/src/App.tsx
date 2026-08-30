@@ -11,6 +11,14 @@ import { RecoupBrandLogo } from "./RecoupBrandLogo";
 // when pointed at a hosted-mode deployment (http://localhost:8791) or a real domain.
 const TRUEFORGE_BASE_URL = import.meta.env.VITE_TRUEFORGE_BASE_URL ?? "http://localhost:8790";
 
+// A session created outside the cockpit's own composer (patrol-dunning.ts's
+// pager, or any direct API call) has no other way to become visible here —
+// confirmed live: the cockpit never lists or resumes any session, even ones
+// created through its own composer, after a reload. TrueForgeUIProps exposes
+// initialSessionId for exactly this; wiring it to a URL param at least makes
+// a specific session openable via a link, which patrol-dunning.ts now prints.
+const SESSION_ID_FROM_URL = new URLSearchParams(window.location.search).get("session") ?? undefined;
+
 export default function App() {
   // The only user-facing surface for TrueForgeUI's own runtime errors (a
   // failed fetch mid-turn, a malformed stream) — previously this callback
@@ -103,6 +111,7 @@ export default function App() {
           },
         }}
         overrides={{ ToolCallCard: RecoupToolCallCard, SubAgentCard: RecoupSubAgentCard, BrandLogo: RecoupBrandLogo }}
+        initialSessionId={SESSION_ID_FROM_URL}
         className="flex-1 min-h-0"
         onError={(error) => {
           console.error("Recoup Cockpit runtime error:", error);

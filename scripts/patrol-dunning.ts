@@ -108,7 +108,11 @@ async function openInvestigation(failedCount: number | "simulated"): Promise<voi
   }
 
   console.log(`PAGED: investigation session ${sessionId} opened for ${COMPANY_ID} with no human prompt.`);
-  console.log(`Watch it (and approve or deny whatever it proposes) in the cockpit: ${COCKPIT_URL}`);
+  // The cockpit has no session list/history of its own (verified: it never
+  // resumes any session, even ones it created itself, after a reload) — a
+  // session created outside its composer is otherwise unreachable. This
+  // direct link is the only way to actually watch this one.
+  console.log(`Watch it (and approve or deny whatever it proposes): ${COCKPIT_URL}/?session=${sessionId}`);
 }
 
 async function main(): Promise<void> {
