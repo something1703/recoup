@@ -27,14 +27,72 @@
  * set. Defaults to the last 24 hours (one sitting's worth of testing);
  * override with --since or widen deliberately with --all-time.
  *
+ * Alongside the agent's numbers it scores a REAL competing baseline over the
+ * exact same reviewed set — the one-line rule "flag every month-to-month
+ * contract" (the strongest trivial heuristic on this dataset) — because
+ * "we scored the agent" only means something next to what the obvious
+ * alternative scores. Results are also written as a JSON artifact under
+ * scripts/eval-results/ so a run can be cited, diffed, and rerun rather than
+ * scrolling back a terminal.
+ *
+ * HONEST LIMITATIONS — state these anywhere these numbers are shown:
+ *  1. The Telco Churn dataset is public and widely used in tutorials; the
+ *     underlying model has almost certainly seen it in training. The DB-level
+ *     holdout is real (no agent-facing role can read the outcome column), but
+ *     it cannot un-train a model. The number still measures something useful —
+ *     whether THIS agent, from THESE observable fields, flags the accounts
+ *     that really churned — but it is not a leak-proof benchmark.
+ *  2. The reviewed set is agent-selected (the agent picks its own shortlist),
+ *     so this is precision/recall on a self-chosen slice, not a stratified
+ *     random sample.
+ *  3. A human Deny on a proposed ticket erases that prediction from the
+ *     ledger (TrueForge never calls the tool on Deny), so a denied flag
+ *     scores as a false negative. The eval measures the agent+approval
+ *     pipeline jointly, not the agent alone.
+ *
  * Usage (uses recoup_eval_scorer — never recoup_agent_readonly/actions_service):
  *   SUPABASE_DB_HOST=... SUPABASE_EVAL_SCORER_PASSWORD=... npx tsx scripts/score-account-health-eval.ts [--since <ISO-8601>] [--all-time]
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
 import { Pool } from "pg";
 
 const COMPANY_ID = "comp_meridian_telecom";
 const DEFAULT_WINDOW_HOURS = 24;
+
+// Wilson score interval — honest error bars for proportions at the small n a
+// single agent run produces (a bare "83.3%" over 6 flags is not a finding).
+function wilson(successes: number, n: number): { low: number; high: number } {
+  if (n === 0) return { low: 0, high: 0 };
+  const z = 1.96;
+  const p = successes / n;
+  const denom = 1 + (z * z) / n;
+  const center = (p + (z * z) / (2 * n)) / denom;
+  const margin = (z / denom) * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
+  return { low: Math.max(0, center - margin), high: Math.min(1, center + margin) };
+}
+
+function pct(x: number): string {
+  return `${(x * 100).toFixed(1)}%`;
+}
+
+type ConfusionMatrix = { truePositive: number; falsePositive: number; falseNegative: number; trueNegative: number };
+
+function score(flagged: Set<string>, truth: { customer_id: string; churned: boolean }[]): ConfusionMatrix & { precision: number; recall: number } {
+  const m: ConfusionMatrix = { truePositive: 0, falsePositive: 0, falseNegative: 0, trueNegative: 0 };
+  for (const row of truth) {
+    const wasFlagged = flagged.has(row.customer_id);
+    if (wasFlagged && row.churned) m.truePositive++;
+    else if (wasFlagged && !row.churned) m.falsePositive++;
+    else if (!wasFlagged && row.churned) m.falseNegative++;
+    else m.trueNegative++;
+  }
+  return {
+    ...m,
+    precision: m.truePositive + m.falsePositive > 0 ? m.truePositive / (m.truePositive + m.falsePositive) : 0,
+    recall: m.truePositive + m.falseNegative > 0 ? m.truePositive / (m.truePositive + m.falseNegative) : 0,
+  };
+}
 
 const host = process.env.SUPABASE_DB_HOST;
 const password = process.env.SUPABASE_EVAL_SCORER_PASSWORD;
@@ -107,49 +165,62 @@ async function main() {
   const flaggedUnreviewed = [...flaggedRaw].filter((id) => !reviewed.has(id));
   const flagged = new Set([...flaggedRaw].filter((id) => reviewed.has(id)));
 
-  const groundTruth = await pool.query<{ customer_id: string; churned: boolean }>(
-    `select g.customer_id, g.churned
+  const groundTruth = await pool.query<{ customer_id: string; churned: boolean; contract_type: string | null }>(
+    `select g.customer_id, g.churned, c.contract_type
      from public.customer_churn_ground_truth g
      join public.customers c on c.id = g.customer_id
      where c.company_id = $1 and g.customer_id = any($2::text[])`,
     [COMPANY_ID, [...reviewed]],
   );
 
-  let truePositive = 0; // flagged AND actually churned
-  let falsePositive = 0; // flagged AND did NOT churn
-  let falseNegative = 0; // reviewed, not flagged, AND actually churned
-  let trueNegative = 0; // reviewed, not flagged, AND did not churn
-  let totalChurned = 0;
-
-  for (const row of groundTruth.rows) {
-    const wasFlagged = flagged.has(row.customer_id);
-    if (row.churned) totalChurned++;
-    if (wasFlagged && row.churned) truePositive++;
-    else if (wasFlagged && !row.churned) falsePositive++;
-    else if (!wasFlagged && row.churned) falseNegative++;
-    else trueNegative++;
-  }
-
-  const precision = truePositive + falsePositive > 0 ? truePositive / (truePositive + falsePositive) : 0;
-  const recall = truePositive + falseNegative > 0 ? truePositive / (truePositive + falseNegative) : 0;
+  const agent = score(flagged, groundTruth.rows);
+  const totalChurned = groundTruth.rows.filter((r) => r.churned).length;
   const baseRate = groundTruth.rows.length > 0 ? totalChurned / groundTruth.rows.length : 0;
+
+  // The competing one-line rule, on the exact same reviewed set: flag every
+  // month-to-month contract. This is the strongest trivial heuristic on this
+  // dataset — if the agent can't beat it, that result gets reported too.
+  const ruleFlagged = new Set(groundTruth.rows.filter((r) => r.contract_type === "Month-to-month").map((r) => r.customer_id));
+  const rule = score(ruleFlagged, groundTruth.rows);
+
+  const precisionCi = wilson(agent.truePositive, agent.truePositive + agent.falsePositive);
+  const recallCi = wilson(agent.truePositive, agent.truePositive + agent.falseNegative);
 
   console.log(
     `comp_meridian_telecom account-health scoring — ${String(groundTruth.rows.length)} reviewed customers with ground truth, ` +
-      `${String(totalChurned)} actually churned (base rate ${(baseRate * 100).toFixed(1)}% within the reviewed set).`,
+      `${String(totalChurned)} actually churned (base rate ${pct(baseRate)} within the reviewed set).`,
   );
   console.log(`Agent flagged ${String(flagged.size)} of the reviewed accounts as at-risk.`);
   if (flaggedUnreviewed.length > 0) {
     console.log(`WARNING: ${String(flaggedUnreviewed.length)} flagged customer_id(s) were never reviewed via get_account_usage — excluded from scoring:`, flaggedUnreviewed);
   }
-  console.log({ truePositive, falsePositive, falseNegative, trueNegative });
-  console.log(`Precision: ${(precision * 100).toFixed(1)}% (of accounts flagged, how many actually churned)`);
-  console.log(`Recall: ${(recall * 100).toFixed(1)}% (of reviewed accounts that actually churned, how many the agent caught)`);
-  console.log(
-    `Naive baseline for comparison, within this same reviewed set: flagging nothing scores 0%/0% precision/recall; ` +
-      `flagging everyone scores ${(baseRate * 100).toFixed(1)}%/100% — precision above the base rate with non-trivial recall ` +
-      "is the bar for 'the agent's judgment beats guessing.'",
-  );
+  console.log({ truePositive: agent.truePositive, falsePositive: agent.falsePositive, falseNegative: agent.falseNegative, trueNegative: agent.trueNegative });
+  console.log(`Precision: ${pct(agent.precision)} [95% CI ${pct(precisionCi.low)}–${pct(precisionCi.high)}] (of accounts flagged, how many actually churned)`);
+  console.log(`Recall: ${pct(agent.recall)} [95% CI ${pct(recallCi.low)}–${pct(recallCi.high)}] (of reviewed accounts that actually churned, how many the agent caught)`);
+  console.log("");
+  console.log("Same reviewed set, competing strategies:");
+  console.log(`  flag nothing:                 precision 0.0%, recall 0.0%`);
+  console.log(`  flag everyone:                precision ${pct(baseRate)}, recall 100.0%`);
+  console.log(`  flag all month-to-month:      precision ${pct(rule.precision)}, recall ${pct(rule.recall)} (flags ${String(ruleFlagged.size)})`);
+  console.log(`  the agent:                    precision ${pct(agent.precision)}, recall ${pct(agent.recall)} (flags ${String(flagged.size)})`);
+  console.log("");
+  console.log("Read the header comment's HONEST LIMITATIONS before citing these numbers anywhere.");
+
+  // Persist the run so it can be cited and compared, not just scrolled past.
+  const artifact = {
+    ran_at: new Date().toISOString(),
+    company_id: COMPANY_ID,
+    window_since: since?.toISOString() ?? "all-time",
+    reviewed_with_ground_truth: groundTruth.rows.length,
+    base_rate: baseRate,
+    flagged_unreviewed: flaggedUnreviewed,
+    agent: { ...agent, precision_ci95: precisionCi, recall_ci95: recallCi, flagged: flagged.size },
+    baseline_flag_all_month_to_month: { ...rule, flagged: ruleFlagged.size },
+  };
+  mkdirSync("scripts/eval-results", { recursive: true });
+  const outPath = `scripts/eval-results/${artifact.ran_at.replace(/[:.]/g, "-")}.json`;
+  writeFileSync(outPath, JSON.stringify(artifact, null, 2) + "\n");
+  console.log(`\nRun artifact written to ${outPath}`);
 
   await pool.end();
 }

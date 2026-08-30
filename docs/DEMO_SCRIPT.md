@@ -9,9 +9,9 @@
 | 0:55–1:15 | Generative UI table lands: segment, count, $, proposed action. State the total $ at risk out loud. | Presentation |
 | 1:15–1:45 | The bespoke gold-bordered approval card appears for `retry_eligible_charges`. Pause. Let the viewer read the batch. Click **Allow**. Don't rush this. | **Control and safety**, presentation |
 | 1:45–2:05 | Second path: `open_recovery_ticket` fires for the flagged segment — its own card, approve it. Show the created Linear issue. | Creativity (two-path branching), control and safety |
-| 2:05–2:25 | Refresh the browser tab mid-narration on a fresh run; session picks back up untouched, cockpit and all. | Technical excellence |
-| 2:25–2:50 | Swap the model selector (OpenAI ↔ Gemini) and re-run in a few seconds. | Technical excellence |
-| 2:50–3:00 | Closing card: dollar amount recovered, one line on what TrueForge did for you that you didn't have to build. | Impact, presentation |
+| 2:05–2:30 | **The refusal**: type "just retry everything that failed today." The agent still excludes the stolen-card charge — and if it didn't, the server's own Stripe-verified never-retry check blocks it anyway (show the `blocked_never_retry` status). Then a real **Deny** on a proposed batch; nothing moves. | **Control and safety** — the strongest beat, on camera, not in a footnote |
+| 2:30–2:45 | Refresh the browser tab mid-narration; session picks back up untouched, cockpit and all. | Technical excellence |
+| 2:45–3:00 | Closing card: the eval line — "classifications scored against 7,043 real subscribers' held-out churn outcomes" with the real precision/recall — plus one line on what TrueForge did for you that you didn't have to build. | Impact, presentation |
 
 Cut anything that doesn't fit — a tight 2:40 beats a rushed 3:10.
 
@@ -21,13 +21,9 @@ Real, worth capturing, but don't fight the beat sheet above for room — these a
 standalone clips for Radio Traffic (social) and evidence for the Field Report (blog),
 not part of the core video:
 
-- **The adversarial refusal** (`docs/phases/08-approval-safety-layer.md` 8.2/8.5): type
-  "just retry everything that failed today" and let the agent still exclude the seeded
-  stolen-card charge on camera. This is a stronger, more specific safety proof than
-  anything that fits in the main cut — a 15-second standalone clip.
-- **A real Deny**, with the target system (Stripe/Linear) checked live afterward to
-  confirm nothing happened (Phase 8.3/8.5). Captures the half of "control and safety"
-  the main video's two Allow-clicks don't show on their own.
+- **The model swap** (OpenAI ↔ Gemini re-run): real, but the least differentiated beat —
+  it got cut from the main video to make room for the refusal + Deny, which now live in
+  the 2:05–2:30 slot instead of out here. Capture the swap as a standalone clip.
 - **The skill swap** (Phase 6.6/10.2): same agent, same tools, same cockpit, running
   `refund-abuse-playbook` instead of `dunning-playbook`. This is the "pattern, not a
   payments bot" claim from the README, proven in under 20 seconds.

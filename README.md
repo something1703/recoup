@@ -7,6 +7,11 @@ pauses for human approval before it touches a real charge or files a real ticket
 
 > Your uptime has an on-call engineer. Your revenue doesn't — until now.
 
+**Try it live:** [the cockpit](https://recoup-cockpit-377323041120.asia-northeast1.run.app)
+(type an investigation prompt, or copy one of the three desk prompts on screen) ·
+[the landing page](https://recoup-landing-377323041120.asia-northeast1.run.app) ·
+run it yourself with [Run it locally](#run-it-locally) below.
+
 ## Why this exists
 
 A large slice of SaaS churn isn't a customer choosing to leave — it's a card expiring, a
@@ -26,12 +31,58 @@ policy into a gated, investigative agent.
 
 | If you are... | Go to |
 |---|---|
-| The coding agent building this | [`AGENTS.md`](./AGENTS.md) — read it first, then [`docs/PHASE_MAP.md`](./docs/PHASE_MAP.md) |
-| A teammate who needs to create an account or hand over a key | [`docs/ACCESS_CHECKLIST.md`](./docs/ACCESS_CHECKLIST.md) |
+| A judge, or checking track/criteria fit | [`docs/JUDGING_FIT.md`](./docs/JUDGING_FIT.md), then [Run it locally](#run-it-locally) |
 | Reviewing the system design | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) |
 | Reviewing the UI/UX plan | [`docs/UI_UX_SPEC.md`](./docs/UI_UX_SPEC.md) |
 | Prepping the demo | [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md) |
-| A judge, or checking track/criteria fit | [`docs/JUDGING_FIT.md`](./docs/JUDGING_FIT.md) |
+| A teammate who needs to create an account or hand over a key | [`docs/ACCESS_CHECKLIST.md`](./docs/ACCESS_CHECKLIST.md) |
+
+**How this was built**: an AI coding agent worked the plan in
+[`docs/PHASE_MAP.md`](./docs/PHASE_MAP.md) phase by phase, with a human directing,
+reviewing, and holding the keys — [`AGENTS.md`](./AGENTS.md) is the standing brief that
+agent works from, and every substantive change still went through a human-merged,
+Qodo-reviewed pull request (see the evidence section below).
+
+## Run it locally
+
+Prereqs: Node ≥ 20, npm.
+
+**The MCP server** (the agent's custom tools — runs fine with zero external accounts in
+dry-run mode):
+
+```bash
+cd mcp-server
+cp .env.example .env   # set MCP_SERVER_TOKEN to any random string; leave DRY_RUN=true
+npm ci
+npm run dev            # serves http://localhost:8890/mcp (bearer-token auth) and /stats
+```
+
+Without `CUSTOMERS_DB_URL`/`RECOVERY_LEDGER_DB_URL` set, the data-backed tools return
+honest errors and the two write tools still demonstrate the full policy-check flow in
+dry-run. To back them with real data, create a free Supabase project and run
+`scripts/seed-supabase.sql` then `scripts/migrate-multi-tenant.sql` against it (each
+file's header says exactly what it creates), and optionally import the real churn
+population per `scripts/import-telco-population.ts`'s header.
+
+**The cockpit** (the operator UI — needs a running TrueForge instance to talk to):
+
+```bash
+# TrueForge itself, if you don't have one: npx @truefoundry/trueforge
+cd cockpit
+npm ci
+npm run build
+TRUEFORGE_BASE_URL=http://localhost:8000 node server.mjs   # serves :8080, proxies /api
+```
+
+Then create an agent named `recoup` in TrueForge from [`agent-spec.json`](./agent-spec.json)
+(Settings → Agents, or `client.agents.create`), register the three skills under
+[`skills/`](./skills/), and add the MCP server from step 1 as a connector with header auth.
+
+**The landing page** (static, no dependencies on the above):
+
+```bash
+cd landing && npm ci && npm run dev   # http://localhost:5174
+```
 
 ## What TrueForge and Qodo are doing, concretely
 

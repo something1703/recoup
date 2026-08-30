@@ -55,10 +55,15 @@ buys no judged criterion:
 
 - **Slack-based approvals.** The harness's own approval UI *is* the point — routing
   around it undercuts the "harness doing the work" argument the whole project rests on.
-- **Multi-tenant anything, auth on the cockpit.** This is a single-purpose demo surface
-  (`docs/UI_UX_SPEC.md`), not a product with users to isolate from each other.
-- **More than two skills.** One proves the pattern (Phase 6.6); a third adds build time
-  without adding proof.
+- ~~**Multi-tenant anything.**~~ **Overturned mid-build, deliberately**: the real Telco
+  churn population (PR #6) made per-tenant data, policy, and thresholds the honest way to
+  prove "pattern, not a payments bot" — three structurally different businesses through
+  one unchanged tool surface beats a second skill file as evidence. Auth on the cockpit
+  stays out of scope: it's still a single-purpose demo surface.
+- ~~**More than two skills.**~~ **Also overturned by the same pivot**: the account-health
+  desk needed its own playbook (renewal risk is not a dunning problem), and it's the desk
+  the held-out eval scores — so the third skill bought the project's only measured number,
+  which is exactly the "adds proof" bar this list set.
 - **A trend chart or dashboard of historical failures.** Stripe test-mode timestamps
   can't be backdated (`docs/ARCHITECTURE.md` gotcha #5) — don't try to fake one.
 - **A second landing page concept or a second design system.** One brand, two surfaces,

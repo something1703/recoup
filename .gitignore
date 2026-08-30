@@ -28,10 +28,22 @@ __pycache__/
 .venv/
 venv/
 
-# Other-harness copies of the impeccable skill (.claude/ is the one this session uses)
+# AI coding-harness scaffolding — local tooling for how this was built, not
+# part of the product a judge or contributor needs (see README's build note)
 .agent/
 .agents/
+.claude/
 .codex/
 .gemini/
 .impeccable/
 repro.png
+
+# The labeled IBM Telco CSV stays out of the repo on purpose: its Churn column
+# is this project's held-out ground truth, and the agent has a read-only GitHub
+# connector — committing the answer key next to the exam defeats the holdout.
+# scripts/import-telco-population.ts's header documents the one-line download.
+scripts/data/
+
+# Eval run artifacts — cite them in the blog/README by copying numbers out,
+# don't accumulate timestamped JSON in git.
+scripts/eval-results/
