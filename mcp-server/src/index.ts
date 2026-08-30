@@ -947,7 +947,7 @@ app.get("/stats", async (req, res) => {
     return;
   }
   try {
-    // DRY_RUN is the project-wide default (AGENTS.md) — rehearsal runs still
+    // DRY_RUN is the project-wide default — rehearsal runs still
     // write to the ledger for their own audit trail, but must never inflate
     // the number a judge or stakeholder reads as real recovered revenue.
     const result = await ledgerDb.query<{ total_recovered_usd: string | null; tickets_opened: string; actions_count: string }>(

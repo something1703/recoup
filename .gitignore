@@ -47,3 +47,9 @@ scripts/data/
 # Eval run artifacts — cite them in the blog/README by copying numbers out,
 # don't accumulate timestamped JSON in git.
 scripts/eval-results/
+
+# Local AI-tooling briefs — how this was built (an agent working a phase plan
+# under human direction) is told in the README; the standing briefs themselves
+# stay local tooling, not part of what a judge or contributor needs to read.
+AGENTS.md
+PRODUCT.md

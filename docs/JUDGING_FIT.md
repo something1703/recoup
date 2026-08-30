@@ -28,6 +28,6 @@
 - **Field report (blog post):** write it during Phase 10, not last — an honest "what
   broke" paragraph is more interesting than a polished-but-generic one, and TrueForge's
   benchmarking docs are a legitimate, citable hook if the write-up compares models.
-- **Radio traffic (social posts):** start capturing clips as early as Phase 5–7, not
-  Phase 10 — see `docs/phases/07-subagent-orchestration.md` onward for good moments to
-  screen-record as they happen.
+- **Radio traffic (social posts):** capture clips as the moments happen (a sub-agent
+  fan-out, an approval card, the pager opening a session by itself), not retroactively
+  at the end.
