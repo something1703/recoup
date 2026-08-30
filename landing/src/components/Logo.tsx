@@ -34,7 +34,7 @@ export default function Logo({ variant = "dark", className = "" }: LogoProps) {
           letterSpacing="4"
           fill={color}
         >
-          REVENUE · EXHIBIT-GRADE
+          REVENUE, ON THE RECORD
         </text>
       </g>
     </svg>

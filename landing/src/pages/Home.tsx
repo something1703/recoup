@@ -4,6 +4,7 @@ import DocketBar from "../components/DocketBar";
 import Exhibit from "../components/Exhibit";
 import Footer from "../components/Footer";
 import LiveLedgerStat from "../components/LiveLedgerStat";
+import ApprovalCardExhibit from "../components/ApprovalCardExhibit";
 
 const COCKPIT_URL = "https://recoup-cockpit-377323041120.asia-northeast1.run.app";
 
@@ -23,12 +24,16 @@ export default function Home() {
             <br />
             Nobody filed a report.
           </h1>
-          <p className="mt-8 max-w-2xl text-base md:text-lg text-paper/85 leading-relaxed">
-            Recoup investigates a payment failure, a refund spike, or a churn
-            signal the way an SRE investigates an outage — four independent
-            sources, evidence computed in executed code, a human signs off
-            before anything real happens. Every claim below is a numbered
-            exhibit. Check any of them yourself.
+          <p className="mt-6 max-w-2xl text-lg md:text-xl font-bold text-paper">
+            Recoup is an AI agent that investigates failed payments, refund
+            abuse, and churn risk — and never touches a charge or files a
+            ticket without your sign-off.
+          </p>
+          <p className="mt-4 max-w-2xl text-base md:text-lg text-paper/85 leading-relaxed">
+            It works the way an SRE investigates an outage — four independent
+            sources correlated, evidence computed in executed code, a human
+            signs off before anything real happens. Every claim below is a
+            numbered exhibit. Check any of them yourself.
           </p>
           <div className="mt-10 flex flex-wrap items-center gap-4">
             <a
@@ -78,6 +83,36 @@ export default function Home() {
         </div>
       </section>
 
+      {/* The Docket — three real tenant companies, three desks */}
+      <section className="case-file py-16 md:py-24">
+        <div className="text-xs font-bold tracking-[0.3em] text-notary mb-4">THE DOCKET</div>
+        <h2 className="font-stamp text-2xl md:text-4xl mb-4 max-w-3xl">
+          Revenue isn't one problem. It's a department.
+        </h2>
+        <p className="max-w-2xl leading-relaxed text-ink/85 mb-10">
+          Recoup runs recovery for multiple real tenant companies, each with
+          its own policy calibrated to its own revenue — not one global
+          threshold pretending every business is the same size.
+        </p>
+        <div className="grid md:grid-cols-3 gap-6">
+          <div className="border border-ink/25 p-5 bg-paper-dim">
+            <div className="text-[10px] tracking-[0.2em] text-notary mb-2">TENANT 01 · B2B SAAS</div>
+            <div className="font-stamp text-lg mb-2">Arcline Software</div>
+            <div className="text-sm text-ink/80">Failed-payment desk — card-level vs. platform-level, safe retry vs. human escalation.</div>
+          </div>
+          <div className="border border-ink/25 p-5 bg-paper-dim">
+            <div className="text-[10px] tracking-[0.2em] text-notary mb-2">TENANT 02 · SUBSCRIPTION RETAIL</div>
+            <div className="font-stamp text-lg mb-2">Ferro Commerce</div>
+            <div className="text-sm text-ink/80">Refund-abuse desk — serial abuse vs. a product-failure wave, quantified before any ticket.</div>
+          </div>
+          <div className="border border-ink/25 p-5 bg-paper-dim">
+            <div className="text-[10px] tracking-[0.2em] text-notary mb-2">TENANT 03 · CONSUMER TELECOM</div>
+            <div className="font-stamp text-lg mb-2">Meridian Telecom</div>
+            <div className="text-sm text-ink/80">Account-health desk — 7,043 real subscribers, scored against a real held-out outcome.</div>
+          </div>
+        </div>
+      </section>
+
       {/* The Evidence — condensed 4-stage summary */}
       <section className="bg-paper-dim py-16 md:py-24">
         <div className="case-file">
@@ -105,6 +140,12 @@ export default function Home() {
               without a human clicking Allow. No exceptions, no confidence
               threshold that skips the human.
             </Exhibit>
+          </div>
+          <div className="mt-10">
+            <ApprovalCardExhibit />
+            <div className="text-[11px] text-ink/50 mt-2 max-w-md">
+              Recreation of the real approval card (cockpit/src/RecoupToolCallCard.tsx) — not a screenshot, and not a real ledger entry. See it live in the cockpit.
+            </div>
           </div>
           <Link
             to="/how-it-works"
