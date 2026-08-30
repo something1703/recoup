@@ -41,8 +41,32 @@ policy into a gated, investigative agent.
   refresh mid-investigation. None of that is hand-rolled — it's the harness doing real
   work, visibly, in the demo.
 - **Qodo** reviews every pull request in this repo before it merges. See
-  `docs/CODE_QUALITY_BAR.md` for the exact workflow, and the "Qodo Code Review Evidence"
-  section below once real PRs exist.
+  `docs/CODE_QUALITY_BAR.md` for the exact workflow, and "Qodo Code Review Evidence"
+  below for a real example.
+
+## Bring your own tenant
+
+Arcline, Ferro, and Meridian are demo tenants, not the whole story — the point is that all
+three (a B2B SaaS, a subscription retailer, and a consumer telecom, three genuinely
+different revenue shapes) run through the exact same `companies` row, the same MCP tools,
+and the same three skills, with no per-tenant code branching. Adding a real fourth tenant
+is the same three steps as adding Meridian was:
+
+1. **Insert a company + policy.** A row in `public.companies` (`scripts/seed-supabase.sql`
+   shows the shape) and a matching `public.dunning_policy` row — thresholds, LTV tiers,
+   never-retry decline codes, all data, not code.
+2. **Connect its real systems.** Point the Stripe/Sentry/GitHub/Linear catalog connectors
+   at that tenant's own accounts in TrueForge's Settings → Connectors — these are live API
+   integrations, not fixtures, so a real (or real test-mode) account works unmodified.
+3. **Import its customer population**, if it's a usage/churn-shaped business rather than a
+   pure Stripe-failures one: `scripts/import-telco-population.ts --company-id
+   comp_your_company --csv path/to/your-customers.csv` (same column shape as
+   `scripts/data/telco-customer-churn.csv`; see the script's own header comment to remap a
+   different shape, and override `ltvTier()`'s cutoffs if your tenant's thresholds differ
+   from the ones in its `dunning_policy` row).
+
+Nothing about the agent, the skills, or the approval gates changes — `company_id` is a
+parameter on every tool call, not a fixed identity baked into the code.
 
 ## Repo layout
 

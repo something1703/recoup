@@ -28,15 +28,35 @@
  *   mkdir -p scripts/data && curl -sL -o scripts/data/telco-customer-churn.csv \
  *     https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv
  *
- * Usage:
+ * Usage (defaults reproduce this project's own Meridian Telecom demo data):
  *   SUPABASE_DB_HOST=... SUPABASE_DB_PASSWORD=... npx tsx scripts/import-telco-population.ts
+ *
+ * To bring your own tenant instead of Meridian's data, pass a company_id and
+ * a CSV in the same shape (customerID, tenure, Contract, PaymentMethod,
+ * MonthlyCharges, TotalCharges, Churn):
+ *   SUPABASE_DB_HOST=... SUPABASE_DB_PASSWORD=... npx tsx scripts/import-telco-population.ts \
+ *     --company-id comp_your_company --csv path/to/your-customers.csv
+ * The company_id must already exist in public.companies (insert it first —
+ * see "Bring your own tenant" in README.md) and have its own dunning_policy
+ * row, since ltv_tier here reuses the same >=$95/>=$55 cutoffs as Meridian's
+ * policy — override ltvTier() below if your tenant's thresholds differ.
  */
 
 import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 
-const CSV_PATH = "scripts/data/telco-customer-churn.csv";
-const COMPANY_ID = "comp_meridian_telecom";
+function parseArgs(argv: string[]) {
+  const get = (flag: string) => {
+    const i = argv.indexOf(flag);
+    return i === -1 ? undefined : argv[i + 1];
+  };
+  return {
+    csvPath: get("--csv") ?? "scripts/data/telco-customer-churn.csv",
+    companyId: get("--company-id") ?? "comp_meridian_telecom",
+  };
+}
+
+const { csvPath: CSV_PATH, companyId: COMPANY_ID } = parseArgs(process.argv.slice(2));
 
 const host = process.env.SUPABASE_DB_HOST;
 const password = process.env.SUPABASE_DB_PASSWORD;
@@ -80,7 +100,11 @@ function signupDateFromTenure(tenureMonths: number): string {
 
 // Hand-rolled split on "," rather than a CSV library: the real dataset has no
 // quoted/escaped commas in any field, verified against the actual file.
-function parseCsv(text: string): Row[] {
+function parseCsv(text: string, companyId: string): Row[] {
+  // Derived from the tenant, not hardcoded to "merid_" — a second
+  // Telco-shaped tenant importing the same public dataset would otherwise
+  // collide on customers.id (global primary key, not scoped per company).
+  const idPrefix = companyId.replace(/^comp_/, "").slice(0, 8) + "_";
   const lines = text.trim().split("\n");
   const header = lines[0]!.split(",");
   const idx = (col: string) => {
@@ -107,10 +131,10 @@ function parseCsv(text: string): Row[] {
     const realId = cols[iId]!;
 
     return {
-      // Meridian's real IDs (e.g. "7590-VHVEG") aren't Stripe customer IDs —
-      // prefix them so they're visibly distinct from Arcline/Ferro's real
-      // cus_... IDs rather than looking like a Stripe object they aren't.
-      id: `merid_${realId}`,
+      // The dataset's real IDs (e.g. "7590-VHVEG") aren't Stripe customer
+      // IDs — prefix them so they're visibly distinct from any tenant's
+      // real cus_... IDs rather than looking like a Stripe object they aren't.
+      id: `${idPrefix}${realId}`,
       name: realId,
       plan: planFromContract(cols[iContract]!),
       mrrUsd: monthlyCharges,
@@ -128,7 +152,7 @@ function parseCsv(text: string): Row[] {
 // Chunked (500/batch) rather than one giant statement: Postgres has a real
 // param-count ceiling, and batching also gives visible progress on 7k+ rows.
 async function main() {
-  const rows = parseCsv(readFileSync(CSV_PATH, "utf8"));
+  const rows = parseCsv(readFileSync(CSV_PATH, "utf8"), COMPANY_ID);
   console.log(`Parsed ${String(rows.length)} real subscriber rows from ${CSV_PATH}`);
 
   const pool = new Pool({ host, port: 5432, user: "postgres", database: "postgres", password, ssl: { rejectUnauthorized: false } });
