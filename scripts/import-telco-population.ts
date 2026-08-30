@@ -42,6 +42,7 @@
  * policy — override ltvTier() below if your tenant's thresholds differ.
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 
@@ -135,7 +136,12 @@ function parseCsv(text: string, companyId: string): Row[] {
       // IDs — prefix them so they're visibly distinct from any tenant's
       // real cus_... IDs rather than looking like a Stripe object they aren't.
       id: `${idPrefix}${realId}`,
-      name: realId,
+      // Pseudonym, NOT the raw dataset ID: the agent sees customer names in
+      // every get_account_usage/list_customers response, and handing it the
+      // verbatim Kaggle customerID would give a dataset-memorizing model a
+      // direct join key back to the published churn labels. Deterministic
+      // (sha256 of the real ID) so re-imports are stable.
+      name: `Subscriber ${createHash("sha256").update(realId).digest("hex").slice(0, 8).toUpperCase()}`,
       plan: planFromContract(cols[iContract]!),
       mrrUsd: monthlyCharges,
       ltvTier: ltvTier(monthlyCharges),
@@ -173,7 +179,7 @@ async function main() {
     await pool.query(
       `insert into public.customers (id, name, plan, mrr_usd, ltv_tier, signup_date, company_id, tenure_months, contract_type, payment_method, total_charges_usd)
        values ${custPlaceholders.join(",\n")}
-       on conflict (id) do nothing`,
+       on conflict (id) do update set name = excluded.name`,
       custParams,
     );
     customersInserted += chunk.length;

@@ -41,7 +41,7 @@ since the manifest file doesn't push itself to an already-created agent.
 
 These aren't things the Recoup agent calls at runtime — they're MCP servers **the coding
 agent building this project** should use, because they're the best currently-maintained
-option for that job. Ask the human for access per `docs/ACCESS_CHECKLIST.md`.
+option for that job. Ask the human for whatever access each needs.
 
 | Server | Job | Endpoint / package | Phase |
 |---|---|---|---|
@@ -54,8 +54,8 @@ option for that job. Ask the human for access per `docs/ACCESS_CHECKLIST.md`.
 **Explicitly not used, and why:**
 
 - **Figma MCP / Framelink** — only useful when a Figma file already exists as the design
-  source of truth. This project has no such file; the design direction gets set directly
-  (Claude Design for the first pass, then `docs/UI_UX_SPEC.md` as the written spec).
+  source of truth. This project has no such file; the design direction was set directly
+  and now lives in the shipped landing/cockpit design system itself.
 - **Neon MCP** — considered during planning, dropped once Supabase (already a one-click
   catalog connector, also free-tier) covered the same need with less custom code.
 

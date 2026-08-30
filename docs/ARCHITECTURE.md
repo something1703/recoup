@@ -117,7 +117,7 @@ flowchart TD
 
 | Layer | Choice | Why |
 |---|---|---|
-| Client | React + `@truefoundry/trueforge-ui`, `SingleAgent` mode | A single-purpose product surface, not an agent browser — see `docs/UI_UX_SPEC.md` |
+| Client | React + `@truefoundry/trueforge-ui`, `SingleAgent` mode | A single-purpose product surface, not an agent browser |
 | Application | Cloud Run (2 services: TrueForge server, `recoup-actions` MCP) | Serverless, scale-to-zero, deployable directly by an MCP server (see `docs/MCP_TOOLKIT.md`) |
 | Data | Supabase free tier, own scratch project, `@read-only` | One-click OAuth catalog entry for schema/project-metadata tools; actual row reads go through `get_customer_ltv` on `recoup-actions` — see gotcha #7, verified the catalog connector's own tools can't do this safely |
 | Cross-replica peering | Upstash Redis | Cloud Run + hosted mode with >1 replica needs Redis for streams/cancellations to follow the client; Upstash needs no VPC connector, unlike Memorystore |

@@ -28,9 +28,8 @@
   explaining why it's genuinely unavoidable, not laziness.
 - **Every MCP tool this project defines is correctly annotated** (`readOnlyHint`,
   `destructiveHint`) and, for anything that writes, named explicitly in
-  `require_approval_for_tools` — this is checked in `docs/phases/08-approval-safety-layer.md`'s exit
-  criteria, but it's a code-quality issue, not just a safety one: an incorrectly annotated
-  tool is a bug.
+  `require_approval_for_tools` — a code-quality issue, not just a safety one: an
+  incorrectly annotated tool is a bug.
 - **Functions get a one-line comment on *why*, not *what*.** `// retry only safe decline
   codes — see dunning-playbook step 4` is useful; `// loop over charges` is noise.
 - **No dead code, no commented-out blocks, no TODO without an issue or a phase reference.**

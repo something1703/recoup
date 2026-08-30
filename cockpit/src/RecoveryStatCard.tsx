@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
  * route built specifically for this: the cockpit calls it directly from the
  * browser, so it must never carry the MCP bearer token or any row-level detail.
  *
- * Ticks up once per value change, not continuously — docs/UI_UX_SPEC.md is
+ * Ticks up once per value change, not continuously — the design spec was
  * explicit that the cockpit is a restrained surface and this is the one
  * micro-interaction it allows here. Respects prefers-reduced-motion.
  */

@@ -5,12 +5,12 @@
  * connects to like any catalog server — via Settings → Connectors → "Add MCP Server".
  *
  * Why this exists: the shipped Stripe / Linear MCP servers expose Stripe's and Linear's
- * full, generic APIs. For the Recoup agent we want exactly TWO high-level, batch-shaped
- * write actions the harness can gate behind a single human approval, plus a small set of
- * safe read-only tools (customer LTV, account usage, per-tenant dunning policy — all
- * scoped by company_id, since Recoup runs recovery for multiple tenant companies, not
- * one). Building this ourselves (rather than composing raw Stripe/Linear calls in a
- * loop) means:
+ * full, generic APIs. For the Recoup agent we want two high-level, batch-shaped write
+ * actions the harness can gate behind a single human approval, plus four read-only tools
+ * (dunning policy, customer LTV, customer discovery, account usage — all scoped by
+ * company_id, since Recoup runs recovery for multiple tenant companies, not one).
+ * Building this ourselves (rather than composing raw Stripe/Linear calls in a loop)
+ * means:
  *
  *   1. ONE approval per batch, not one per charge — TrueForge does not yet support
  *      "approve once" for repeated calls (see /roadmap), so a tool that takes an array
@@ -86,10 +86,13 @@ const RECOVERY_LEDGER_DB_URL = process.env.RECOVERY_LEDGER_DB_URL;
 const ledgerDb = RECOVERY_LEDGER_DB_URL ? new Pool({ connectionString: RECOVERY_LEDGER_DB_URL, max: 3 }) : undefined;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout;
   return Promise.race([
     promise,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${String(ms)}ms`)), ms)),
-  ]);
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`timed out after ${String(ms)}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 type LedgerEntry = {
@@ -166,13 +169,17 @@ async function recordLedgerEntry(entry: LedgerEntry): Promise<void> {
 // Guards Finding #9 (double-counting): a charge already credited as recovered
 // in a prior *live* run must not be counted again if the same batch is
 // resubmitted — Stripe itself is safe to re-confirm, but our own sum isn't.
-async function getAlreadyRecoveredChargeIds(): Promise<Set<string>> {
-  if (!ledgerDb) return new Set();
+// Scoped to the tenant and overlap-filtered in SQL rather than loading the
+// whole ledger's arrays into memory on every call.
+async function getAlreadyRecoveredChargeIds(companyId: string, chargeIds: string[]): Promise<Set<string>> {
+  if (!ledgerDb || chargeIds.length === 0) return new Set();
   try {
     const result = await withTimeout(
       ledgerDb.query<{ charge_ids: string[] | null }>(
         `select charge_ids from public.recovery_ledger
-         where action_type = 'retry_eligible_charges' and outcome ->> 'dry_run' = 'false'`,
+         where action_type = 'retry_eligible_charges' and outcome ->> 'dry_run' = 'false'
+           and company_id = $1 and charge_ids && $2::text[]`,
+        [companyId, chargeIds],
       ),
       1500,
     );
@@ -183,6 +190,71 @@ async function getAlreadyRecoveredChargeIds(): Promise<Set<string>> {
     console.error("[recovery_ledger] dedup lookup failed (proceeding without it):", err instanceof Error ? err.message : err);
     return new Set();
   }
+}
+
+// Enforces dunning_policy.max_auto_retry_attempts from the ledger's own
+// history — the agent never gets to decide a charge has budget left. Counts
+// within the same mode as the current call (a dry-run rehearsal shouldn't
+// exhaust a charge's live budget, and vice versa). Fails CLOSED: if the
+// history can't be read, no charge gets another attempt on a guess.
+async function getRetryAttemptCounts(companyId: string, chargeIds: string[], dryRun: boolean): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (!ledgerDb || chargeIds.length === 0) return counts;
+  const result = await withTimeout(
+    ledgerDb.query<{ charge_id: string; attempts: string }>(
+      `select unnest(charge_ids) as charge_id, count(*) as attempts
+       from public.recovery_ledger
+       where action_type = 'retry_eligible_charges' and outcome ->> 'dry_run' = $3
+         and company_id = $1 and charge_ids && $2::text[]
+       group by 1`,
+      [companyId, chargeIds, dryRun ? "true" : "false"],
+    ),
+    1500,
+  );
+  for (const row of result.rows) counts.set(row.charge_id, Number(row.attempts));
+  return counts;
+}
+
+// The real decline code and customer for a charge, from Stripe itself — the
+// point is that eligibility is checked against what Stripe says happened, not
+// against what the caller claims happened.
+type VerifiedCharge = { declineCode: string | undefined; customerId: string | undefined };
+
+async function verifyChargeWithStripe(stripe: import("stripe").default, chargeId: string): Promise<VerifiedCharge> {
+  if (chargeId.startsWith("in_")) {
+    const invoice = await stripe.invoices.retrieve(chargeId, { expand: ["payment_intent"] });
+    const pi = typeof invoice.payment_intent === "object" ? invoice.payment_intent : undefined;
+    return {
+      declineCode: pi?.last_payment_error?.decline_code ?? pi?.last_payment_error?.code ?? undefined,
+      customerId: typeof invoice.customer === "string" ? invoice.customer : (invoice.customer?.id ?? undefined),
+    };
+  }
+  const pi = await stripe.paymentIntents.retrieve(chargeId);
+  return {
+    declineCode: pi.last_payment_error?.decline_code ?? pi.last_payment_error?.code ?? undefined,
+    customerId: typeof pi.customer === "string" ? pi.customer : (pi.customer?.id ?? undefined),
+  };
+}
+
+// Which of these customers sit in an ltv_tier the tenant's policy marks
+// escalate_to_human_always — those belong on the open_recovery_ticket path
+// (a human owns that relationship), never in an auto-retry batch, even one a
+// human just approved: the approval was for a batch that policy says should
+// not have contained them. Read via customersDb (the same data the agent
+// reads) because the actions-service role deliberately has no customers grant.
+async function getEscalateAlwaysCustomerIds(companyId: string, customerIds: string[], policy: DunningPolicy): Promise<Set<string>> {
+  const escalateTiers = Object.entries(policy.ltv_tiers)
+    .filter(([, tier]) => tier.escalate_to_human_always)
+    .map(([name]) => name);
+  if (!customersDb || escalateTiers.length === 0 || customerIds.length === 0) return new Set();
+  const result = await withTimeout(
+    customersDb.query<{ id: string }>(
+      "select id from public.customers where company_id = $1 and id = any($2::text[]) and ltv_tier = any($3::text[])",
+      [companyId, customerIds, escalateTiers],
+    ),
+    1500,
+  );
+  return new Set(result.rows.map((r) => r.id));
 }
 
 // Logs who get_account_usage actually looked at, so the eval scorer can score against a reviewed set instead of the whole real population.
@@ -455,11 +527,14 @@ function buildServer(): McpServer {
       title: "Retry eligible charges",
       description:
         "Retry a batch of failed Stripe charges/invoices that were classified as safe-to-retry " +
-        "(e.g. insufficient_funds, do_not_honor) and are NOT flagged for mandatory human escalation. " +
-        "Each charge must include the decline code it failed with — this server independently checks " +
-        "it against never_retry_decline_codes and refuses those regardless of what the caller intended. " +
-        "Moves real money when DRY_RUN is off — this call is annotated destructive and MUST be gated " +
-        "behind human approval in the agent spec (require_approval_for_tools).",
+        "(e.g. insufficient_funds, do_not_honor). This server does NOT trust the caller's " +
+        "classification: when a Stripe key is configured it fetches each charge's REAL decline code " +
+        "and customer from Stripe, blocks real never-retry codes, blocks claimed-vs-real mismatches, " +
+        "blocks customers in escalate_to_human_always LTV tiers, and always enforces " +
+        "max_auto_retry_attempts from its own ledger history. Expect per-charge blocked_* statuses " +
+        "in the result when any of these fire. Moves real money when DRY_RUN is off — this call is " +
+        "annotated destructive and MUST be gated behind human approval in the agent spec " +
+        "(require_approval_for_tools).",
       inputSchema: {
         company_id: z.string().describe("The tenant company these charges belong to — its dunning_policy governs the never-retry check below."),
         charges: z
@@ -490,23 +565,115 @@ function buildServer(): McpServer {
       if (!ledgerDb) {
         return { isError: true, content: [{ type: "text", text: "RECOVERY_LEDGER_DB_URL is not configured — cannot verify dunning policy independently." }] };
       }
-      // Independent server-side check, deliberately using the actions-service
-      // pool (not customersDb) — this is the server's own belt-and-suspenders
-      // verification against DB-backed policy, not a trust of the agent's
-      // claimed classification. Hard block: never retry these codes under any
-      // circumstance, even if the batch was approved.
+      // Server-side policy check, deliberately using the actions-service pool
+      // (not customersDb). The point of everything below: eligibility is
+      // decided from what Stripe and this server's own ledger say, never from
+      // what the caller claims — an agent that mislabels a stolen_card charge
+      // as insufficient_funds must not sail through on its own homework.
       const policy = await getDunningPolicy(ledgerDb, company_id);
       if (!policy) {
         return { isError: true, content: [{ type: "text", text: `No dunning_policy row for company_id "${company_id}" — refusing to guess at never-retry codes.` }] };
       }
+      // Any Stripe call — including verification reads — only ever with a
+      // test-mode key. Checked before the first call, not just the live path.
+      if (STRIPE_SECRET_KEY && !STRIPE_SECRET_KEY.startsWith("sk_test_")) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: "STRIPE_SECRET_KEY is not a test-mode key (must start with sk_test_) — refusing to make any Stripe call." }],
+        };
+      }
+
       const neverRetry = new Set<string>(policy.never_retry_decline_codes);
-      const blocked = charges.filter((c) => neverRetry.has(c.decline_code));
-      const eligible = charges.filter((c) => !neverRetry.has(c.decline_code));
-      const blockedResults = blocked.map((c) => ({
-        id: c.charge_id,
-        status: "blocked_never_retry" as const,
-        decline_code: c.decline_code,
-      }));
+      const blockedResults: { id: string; status: string; decline_code?: string; detail?: string }[] = [];
+      // First screen: the claimed code. Cheap, but never sufficient on its own.
+      let eligible = charges.filter((c) => {
+        if (!neverRetry.has(c.decline_code)) return true;
+        blockedResults.push({ id: c.charge_id, status: "blocked_never_retry", decline_code: c.decline_code });
+        return false;
+      });
+
+      // Second screen: max_auto_retry_attempts, from this server's own ledger
+      // history. Fails CLOSED — no history read, no retry budget granted.
+      let attemptCounts: Map<string, number>;
+      try {
+        attemptCounts = await getRetryAttemptCounts(company_id, eligible.map((c) => c.charge_id), DRY_RUN);
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Cannot read retry-attempt history from the ledger — refusing to retry without knowing each charge's remaining budget. (${err instanceof Error ? err.message : String(err)})` }],
+        };
+      }
+      eligible = eligible.filter((c) => {
+        const attempts = attemptCounts.get(c.charge_id) ?? 0;
+        if (attempts < policy.max_auto_retry_attempts) return true;
+        blockedResults.push({
+          id: c.charge_id,
+          status: "blocked_max_attempts",
+          detail: `already retried ${String(attempts)}x, policy allows ${String(policy.max_auto_retry_attempts)}`,
+        });
+        return false;
+      });
+
+      // Third screen, when a Stripe key is available (works in DRY_RUN too):
+      // fetch each charge's REAL decline code and customer from Stripe, block
+      // real never-retry codes, block claimed-vs-real mismatches outright
+      // (a wrong classification means the batch composition can't be trusted),
+      // and block customers whose ltv_tier is escalate_to_human_always —
+      // policy says those belong on the ticket path, not in a retry batch.
+      // Individual verification failures fail closed per charge.
+      let verification: "stripe_verified" | "caller_claimed_only" = "caller_claimed_only";
+      if (STRIPE_SECRET_KEY) {
+        verification = "stripe_verified";
+        const { default: Stripe } = await import("stripe");
+        const stripe = new Stripe(STRIPE_SECRET_KEY);
+        const verified = new Map<string, VerifiedCharge>();
+        for (const c of eligible) {
+          try {
+            verified.set(c.charge_id, await verifyChargeWithStripe(stripe, c.charge_id));
+          } catch (err) {
+            verified.set(c.charge_id, { declineCode: undefined, customerId: undefined });
+            blockedResults.push({
+              id: c.charge_id,
+              status: "blocked_unverified",
+              detail: `could not fetch this charge from Stripe to verify it: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          }
+        }
+        eligible = eligible.filter((c) => {
+          if (blockedResults.some((b) => b.id === c.charge_id)) return false;
+          const real = verified.get(c.charge_id);
+          if (real?.declineCode && neverRetry.has(real.declineCode)) {
+            blockedResults.push({ id: c.charge_id, status: "blocked_never_retry", decline_code: real.declineCode, detail: "Stripe's real decline code, not the claimed one" });
+            return false;
+          }
+          if (real?.declineCode && real.declineCode !== c.decline_code) {
+            blockedResults.push({
+              id: c.charge_id,
+              status: "blocked_decline_code_mismatch",
+              detail: `caller claimed ${c.decline_code}, Stripe says ${real.declineCode} — re-propose with the real code`,
+            });
+            return false;
+          }
+          return true;
+        });
+        const customerIdsByCharge = new Map(eligible.map((c) => [c.charge_id, verified.get(c.charge_id)?.customerId]));
+        const customerIds = [...new Set([...customerIdsByCharge.values()].filter((id): id is string => Boolean(id)))];
+        try {
+          const escalateAlways = await getEscalateAlwaysCustomerIds(company_id, customerIds, policy);
+          eligible = eligible.filter((c) => {
+            const customerId = customerIdsByCharge.get(c.charge_id);
+            if (!customerId || !escalateAlways.has(customerId)) return true;
+            blockedResults.push({
+              id: c.charge_id,
+              status: "blocked_escalate_tier",
+              detail: `customer ${customerId} is in an escalate_to_human_always LTV tier — open_recovery_ticket is the policy path for this account`,
+            });
+            return false;
+          });
+        } catch (err) {
+          console.error("[retry_eligible_charges] LTV-tier escalation check unavailable (proceeding without it):", err instanceof Error ? err.message : err);
+        }
+      }
 
       if (DRY_RUN || !STRIPE_SECRET_KEY) {
         const results = eligible.map((c) => ({ id: c.charge_id, status: "simulated_retry_success" as const }));
@@ -517,7 +684,7 @@ function buildServer(): McpServer {
           reason,
           chargeIds: eligible.map((c) => c.charge_id),
           amountUsd,
-          outcome: { dry_run: true, results: [...blockedResults, ...results] },
+          outcome: { dry_run: true, verification, results: [...blockedResults, ...results] },
         });
         return {
           content: [
@@ -526,7 +693,12 @@ function buildServer(): McpServer {
               text: JSON.stringify(
                 {
                   dry_run: true,
-                  note: "DRY_RUN is on (or STRIPE_SECRET_KEY is unset) — no real Stripe call was made.",
+                  verification,
+                  note:
+                    "DRY_RUN is on — no charge was actually retried." +
+                    (verification === "caller_claimed_only"
+                      ? " No STRIPE_SECRET_KEY is set, so decline codes could not be independently verified against Stripe this run."
+                      : " Decline codes and LTV tiers WERE independently verified against Stripe before simulating."),
                   reason,
                   results: [...blockedResults, ...results],
                 },
@@ -538,58 +710,60 @@ function buildServer(): McpServer {
         };
       }
 
-      if (!STRIPE_SECRET_KEY.startsWith("sk_test_")) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: "STRIPE_SECRET_KEY is not a test-mode key (must start with sk_test_) — refusing to make a live call.",
-            },
-          ],
-        };
-      }
-
       // Live path. PaymentIntents and Invoices need different Stripe calls — distinguish
       // by ID prefix (pi_ vs in_) rather than assuming every ID is a PaymentIntent.
       const { default: Stripe } = await import("stripe");
       const stripe = new Stripe(STRIPE_SECRET_KEY);
-      const liveResults = await Promise.all(
-        eligible.map(async ({ charge_id, amount_usd }) => {
-          try {
-            const result = charge_id.startsWith("in_")
-              ? await stripe.invoices.pay(charge_id)
-              : await stripe.paymentIntents.confirm(charge_id);
-            return { id: charge_id, status: result.status, amount_usd };
-          } catch (err) {
-            return { id: charge_id, status: "error", amount_usd, error: err instanceof Error ? err.message : String(err) };
-          }
-        }),
-      );
+      type LiveResult = { id: string; status: string | null; claimed_amount_usd: number; stripe_amount_usd: number; error?: string };
+      const liveResults: LiveResult[] = [];
+      // Chunked, not one unbounded Promise.all of 50 concurrent Stripe writes.
+      const CONCURRENCY = 10;
+      for (let i = 0; i < eligible.length; i += CONCURRENCY) {
+        const chunk = eligible.slice(i, i + CONCURRENCY);
+        const chunkResults = await Promise.all(
+          chunk.map(async ({ charge_id, amount_usd }): Promise<LiveResult> => {
+            try {
+              if (charge_id.startsWith("in_")) {
+                const invoice = await stripe.invoices.pay(charge_id);
+                return { id: charge_id, status: invoice.status, claimed_amount_usd: amount_usd, stripe_amount_usd: (invoice.amount_paid ?? 0) / 100 };
+              }
+              const pi = await stripe.paymentIntents.confirm(charge_id);
+              return { id: charge_id, status: pi.status, claimed_amount_usd: amount_usd, stripe_amount_usd: (pi.amount_received ?? 0) / 100 };
+            } catch (err) {
+              return { id: charge_id, status: "error", claimed_amount_usd: amount_usd, stripe_amount_usd: 0, error: err instanceof Error ? err.message : String(err) };
+            }
+          }),
+        );
+        liveResults.push(...chunkResults);
+      }
       // Only a genuinely-paid result counts as "recovered" — confirm() can
       // return requires_action/requires_payment_method/canceled without
-      // throwing, and only "paid" means an invoice actually collected.
+      // throwing, and only "paid" means an invoice actually collected. The
+      // recovered sum uses STRIPE's amount_received/amount_paid, never the
+      // agent's claimed figure — the claimed figure is recorded alongside it
+      // so the ledger shows claimed-vs-actual for every batch.
       const isRecovered = (r: { id: string; status: string | null }) =>
         r.id.startsWith("in_") ? r.status === "paid" : r.status === "succeeded";
       // A charge already credited in a prior live run must not be counted
       // again if this exact batch gets resubmitted (Finding #9).
-      const alreadyRecovered = await getAlreadyRecoveredChargeIds();
+      const alreadyRecovered = await getAlreadyRecoveredChargeIds(company_id, eligible.map((c) => c.charge_id));
       const recoveredUsd = liveResults
         .filter((r) => isRecovered(r) && !alreadyRecovered.has(r.id))
-        .reduce((sum, r) => sum + r.amount_usd, 0);
+        .reduce((sum, r) => sum + r.stripe_amount_usd, 0);
+      const claimedUsd = eligible.reduce((sum, c) => sum + c.amount_usd, 0);
       await recordLedgerEntry({
         companyId: company_id,
         actionType: "retry_eligible_charges",
         reason,
         chargeIds: eligible.map((c) => c.charge_id),
         amountUsd: recoveredUsd,
-        outcome: { dry_run: false, results: [...blockedResults, ...liveResults] },
+        outcome: { dry_run: false, verification, claimed_amount_usd: claimedUsd, recovered_amount_usd: recoveredUsd, results: [...blockedResults, ...liveResults] },
       });
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ dry_run: false, reason, results: [...blockedResults, ...liveResults] }, null, 2),
+            text: JSON.stringify({ dry_run: false, verification, reason, recovered_amount_usd: recoveredUsd, results: [...blockedResults, ...liveResults] }, null, 2),
           },
         ],
       };
@@ -746,12 +920,20 @@ function requireBearerToken(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
-app.get("/healthz", (_req, res) => {
+// Both paths on purpose: Google's frontend reserves the literal /healthz on
+// *.run.app and serves its own 404 before the request reaches this container
+// (verified live — /healthz gets GFE's 404 page, every other path reaches
+// Express). /health is the one that works on Cloud Run; /healthz kept for
+// local/other hosts.
+app.get(["/health", "/healthz"], (_req, res) => {
   res.json({ ok: true, dry_run: DRY_RUN });
 });
 
 // Public and aggregate-only so the cockpit's browser can call it directly — never row-level detail, never the MCP bearer token.
 // Optional ?company_id= scopes to one tenant; omitted, it aggregates across all of them.
+// 30s in-memory cache per scope: this endpoint is unauthenticated, so without
+// it every anonymous request is a free Postgres query against the demo DB.
+const statsCache = new Map<string, { at: number; body: unknown }>();
 app.get("/stats", async (req, res) => {
   res.set("Access-Control-Allow-Origin", "*");
   if (!ledgerDb) {
@@ -759,8 +941,13 @@ app.get("/stats", async (req, res) => {
     return;
   }
   const companyId = typeof req.query.company_id === "string" ? req.query.company_id : undefined;
+  const cached = statsCache.get(companyId ?? "*");
+  if (cached && Date.now() - cached.at < 30_000) {
+    res.json(cached.body);
+    return;
+  }
   try {
-    // DRY_RUN is the project-wide default (AGENTS.md) — rehearsal runs still
+    // DRY_RUN is the project-wide default — rehearsal runs still
     // write to the ledger for their own audit trail, but must never inflate
     // the number a judge or stakeholder reads as real recovered revenue.
     const result = await ledgerDb.query<{ total_recovered_usd: string | null; tickets_opened: string; actions_count: string }>(
@@ -773,11 +960,13 @@ app.get("/stats", async (req, res) => {
       [companyId ?? null],
     );
     const row = result.rows[0];
-    res.json({
+    const body = {
       total_recovered_usd: Number(row?.total_recovered_usd ?? 0),
       tickets_opened: Number(row?.tickets_opened ?? 0),
       actions_count: Number(row?.actions_count ?? 0),
-    });
+    };
+    statsCache.set(companyId ?? "*", { at: Date.now(), body });
+    res.json(body);
   } catch (err) {
     console.error("[/stats] query failed:", err instanceof Error ? err.message : err);
     res.status(503).json({ error: "stats temporarily unavailable" });
@@ -786,7 +975,7 @@ app.get("/stats", async (req, res) => {
 
 app.post("/mcp", requireBearerToken, async (req, res) => {
   // Stateless mode: a fresh server + transport per request, closed when the
-  // response ends. Simplest correct option for three low-traffic tools.
+  // response ends. Simplest correct option for six low-traffic tools.
   const server = buildServer();
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {
@@ -797,8 +986,25 @@ app.post("/mcp", requireBearerToken, async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`recoup-actions-mcp listening on :${PORT} (DRY_RUN=${DRY_RUN})`);
   console.log(`Register in TrueForge as a remote MCP server at http(s)://<public-url>/mcp`);
   console.log("Header auth configured — send Authorization: Bearer <your MCP_SERVER_TOKEN> (never logged)");
+});
+
+// Cloud Run's scale-to-zero sends SIGTERM as the NORMAL lifecycle, not an edge
+// case — without this, any queued ledger rows for already-succeeded actions
+// die with the process, which defeats the retry queue's whole purpose. Flush
+// once, best-effort, inside Cloud Run's 10s grace window, then exit.
+process.on("SIGTERM", () => {
+  console.log(`[shutdown] SIGTERM: flushing ${String(pendingLedgerEntries.length)} queued ledger entr(ies) before exit`);
+  httpServer.close();
+  void (async () => {
+    try {
+      await flushPendingLedgerEntries();
+    } finally {
+      await Promise.allSettled([customersDb?.end(), ledgerDb?.end()]);
+      process.exit(pendingLedgerEntries.length === 0 ? 0 : 1);
+    }
+  })();
 });

@@ -1,52 +1,94 @@
 {
   "model": {
     "name": "google-gemini/gemini-3-1-pro-preview",
-    "params": { "max_tokens": 8192, "temperature": 0.2, "reasoning_effort": "low" }
+    "params": {
+      "max_tokens": 8192,
+      "temperature": 0.2,
+      "reasoning_effort": "medium"
+    }
   },
-
-  "instructions": "You are Recoup, a revenue-recovery agent — an SRE for a company's whole revenue department, not just failed payments, and you run this for MULTIPLE tenant companies (see the companies table / get_dunning_thresholds), never assuming one tenant's data, policy, or thresholds apply to another. Always confirm which company_id you're investigating and pass it to every tool call. Three playbooks cover the desks you run: dunning-playbook (failed-payment incidents — card-level vs platform-level, retry vs escalate), refund-abuse-playbook (refund spikes — serial abuse vs a product-failure wave), and account-health-playbook (renewal/expansion risk — a bug-driven usage drop vs organic disengagement, or real multi-signal churn risk vs a customer that only looks risky on one field). Follow the matching skill exactly for whichever kind of investigation you've been asked to run. Delegate multi-source correlation to parallel sub-agents rather than working through sources one at a time. Always quantify dollar impact in the sandbox (Code Mode), never in prose. Always classify root cause before proposing any action. Never call retry_eligible_charges or open_recovery_ticket speculatively — only after the classification in the relevant skill supports it, and always with a clear one-sentence reason. Keep your final report short: what happened, $ at risk, proposed action per segment, what you need approved. You are talking to an ops/finance stakeholder, not an engineer — avoid raw JSON in your replies.",
-
+  "instructions": "You are Recoup, a revenue-recovery agent \u2014 an SRE for a company's whole revenue department, not just failed payments, and you run this for MULTIPLE tenant companies (see the companies table / get_dunning_thresholds), never assuming one tenant's data, policy, or thresholds apply to another. Always confirm which company_id you're investigating and pass it to every tool call. Three playbooks cover the desks you run: dunning-playbook (failed-payment incidents \u2014 card-level vs platform-level, retry vs escalate), refund-abuse-playbook (refund spikes \u2014 serial abuse vs a product-failure wave), and account-health-playbook (renewal/expansion risk \u2014 a bug-driven usage drop vs organic disengagement, or real multi-signal churn risk vs a customer that only looks risky on one field). Follow the matching skill exactly for whichever kind of investigation you've been asked to run. Delegate multi-source correlation to parallel sub-agents rather than working through sources one at a time. Always quantify dollar impact in the sandbox (Code Mode), never in prose. Always classify root cause before proposing any action. Never call retry_eligible_charges or open_recovery_ticket speculatively \u2014 only after the classification in the relevant skill supports it, and always with a clear one-sentence reason. Keep your final report short: what happened, $ at risk, proposed action per segment, what you need approved. You are talking to an ops/finance stakeholder, not an engineer \u2014 avoid raw JSON in your replies. Stripe specifics: use stripe_api_search/stripe_api_read for charge data and never call stripe_analytics \u2014 it requires a paid Sigma plan this account does not have and will always error. Delegation is not optional: stage 2 of every playbook MUST be delegated by calling the built-in create_sub_agent tool \u2014 spawn one subagent per evidence source (Stripe segment sizing, customer value tiering, Sentry error correlation, GitHub deploy correlation), run them in parallel, and merge their findings. Never work the evidence sources serially in your own context.",
   "mcp_servers": [
     {
       "name": "stripe",
-      "enable_tools": ["@all"],
-      "require_approval_for_tools": ["@write", "@destructive"],
+      "enable_tools": [
+        "@all"
+      ],
+      "require_approval_for_tools": [
+        "@write",
+        "@destructive"
+      ],
       "preload": true
     },
     {
       "name": "linear",
-      "enable_tools": ["@all"],
-      "require_approval_for_tools": ["@write", "@destructive"],
+      "enable_tools": [
+        "@all"
+      ],
+      "require_approval_for_tools": [
+        "@write",
+        "@destructive"
+      ],
       "preload": true
     },
     {
       "name": "sentry",
-      "enable_tools": ["@read-only"],
+      "enable_tools": [
+        "@read-only"
+      ],
       "preload": true
     },
     {
       "name": "github",
-      "enable_tools": ["@read-only"],
+      "enable_tools": [
+        "@read-only"
+      ],
       "preload": true
     },
     {
       "name": "recoup-actions",
-      "enable_tools": ["@all"],
-      "require_approval_for_tools": ["retry_eligible_charges", "open_recovery_ticket"],
+      "enable_tools": [
+        "@all"
+      ],
+      "require_approval_for_tools": [
+        "retry_eligible_charges",
+        "open_recovery_ticket"
+      ],
       "preload": true
     }
   ],
-
-  "skills": [{ "name": "dunning-playbook" }, { "name": "refund-abuse-playbook" }, { "name": "account-health-playbook" }],
-
+  "skills": [
+    {
+      "name": "dunning-playbook"
+    },
+    {
+      "name": "refund-abuse-playbook"
+    },
+    {
+      "name": "account-health-playbook"
+    }
+  ],
   "config": {
-    "sandbox": { "enabled": true, "file_downloads": true },
-    "generative_ui": { "enabled": true },
-    "ask_user_questions": { "enabled": true },
-    "dynamic_sub_agents": { "enabled": true },
+    "sandbox": {
+      "enabled": true,
+      "file_downloads": true
+    },
+    "generative_ui": {
+      "enabled": true
+    },
+    "ask_user_questions": {
+      "enabled": true
+    },
+    "dynamic_sub_agents": {
+      "enabled": true
+    },
     "context_management": {
-      "compaction": { "enabled": true },
-      "large_tool_response": { "enabled": true }
+      "compaction": {
+        "enabled": true
+      },
+      "large_tool_response": {
+        "enabled": true
+      }
     },
     "iteration_limit": 60
   }
