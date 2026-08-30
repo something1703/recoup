@@ -1,3 +1,5 @@
+import { motion } from "framer-motion";
+
 // The real held-out evaluation pipeline — not a generic "AI accuracy" bar chart.
 export default function EvalMethodDiagram() {
   const steps = [
@@ -7,9 +9,14 @@ export default function EvalMethodDiagram() {
     { label: "SCORED,\nNOT NARRATED", sub: "score-account-\nhealth-eval.ts" },
   ];
   return (
-    <svg viewBox="0 0 480 140" className="w-full h-auto" role="img" aria-label="Real subscriber population, agent classification, held-out ground truth, scored evaluation">
+    <svg
+      viewBox="0 0 480 140"
+      className="w-full h-auto"
+      role="img"
+      aria-label="Real subscriber population, agent classification, held-out ground truth, scored evaluation"
+    >
       {steps.slice(0, -1).map((_, i) => (
-        <line
+        <motion.line
           key={i}
           x1={110 + i * 120}
           y1="55"
@@ -18,6 +25,10 @@ export default function EvalMethodDiagram() {
           stroke="#16130f"
           strokeWidth="1.5"
           markerEnd="url(#arrow)"
+          initial={{ pathLength: 0 }}
+          whileInView={{ pathLength: 1 }}
+          viewport={{ once: true, margin: "0px 0px -15% 0px" }}
+          transition={{ duration: 0.3, delay: 0.3 + i * 0.28 }}
         />
       ))}
       <defs>
@@ -26,7 +37,19 @@ export default function EvalMethodDiagram() {
         </marker>
       </defs>
       {steps.map((s, i) => (
+        // Static position on a plain outer <g>; the motion.g nested inside
+        // only carries the animation. Framer Motion writes its own CSS
+        // transform onto whatever element it animates, which silently wins
+        // over an XML transform="translate(...)" attribute on that SAME
+        // element — confirmed live via getBoundingClientRect: all four boxes
+        // collapsed to one identical x position until this split fixed it.
         <g key={s.label} transform={`translate(${i * 120}, 10)`}>
+        <motion.g
+          initial={{ opacity: 0, y: 14 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: "0px 0px -15% 0px" }}
+          transition={{ duration: 0.4, delay: i * 0.28, ease: "backOut" }}
+        >
           <rect
             width="105"
             height="90"
@@ -62,6 +85,7 @@ export default function EvalMethodDiagram() {
               {line}
             </text>
           ))}
+        </motion.g>
         </g>
       ))}
     </svg>
